@@ -160,12 +160,23 @@ Two required repository secrets:
 
 Optional:
 
-- `BUSY_CALENDAR_IDS` — comma-separated list of calendar IDs to consult for
-  conflicts (e.g. your personal Gmail calendar + your work calendar). For each
-  candidate match, we query Google's freeBusy API; if any of those calendars
-  shows you busy during the match window, the match is skipped instead of
-  being pushed. **The service account email must be granted "See all event
-  details" on each of those calendars.**
+- `BUSY_CALENDAR_IDS` — comma-separated list of **Google** calendar IDs to
+  consult for conflicts. For each candidate match we query Google's freeBusy
+  API; if any of those calendars shows you busy during the match window, the
+  match is skipped instead of pushed. The service account must be granted
+  "See all event details" on each.
+- `BUSY_ICS_URLS` — comma-separated list of public ICS feed URLs to ingest
+  as additional busy sources. **Use this for Office365/Exchange calendars**
+  (or anything else not on Google) — Google's freeBusy can't reach them, but
+  Outlook can publish a calendar as an ICS URL:
+
+  > Outlook on the web → Settings → Calendar → Shared calendars →
+  > Publish a calendar → pick the calendar → permission "Can view all
+  > details" (or at minimum "Can view when I'm busy") → publish → copy
+  > the **ICS** link (not the HTML one).
+
+  Note: corporate Workspace admins often disable external publishing —
+  if your org does, you'll need IT to enable it for your calendar.
 
 The workflow at [`.github/workflows/daily.yml`](.github/workflows/daily.yml) runs every 3 hours and exposes a
 manual `workflow_dispatch` trigger with a dry-run toggle. A separate `test`

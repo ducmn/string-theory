@@ -29,7 +29,9 @@ from .calendar_push import (
 )
 from .conflicts import (
     busy_calendar_ids,
+    busy_ics_urls,
     fetch_busy_intervals,
+    fetch_ics_busy_intervals,
     filter_against_busy,
     pick_non_overlapping,
 )
@@ -109,16 +111,20 @@ def main(argv: list[str] | None = None) -> int:
 
     service = None
     busy_ids = busy_calendar_ids()
-    if busy_ids and not args.dry_run and pushable:
-        service = build_calendar_service()
-        if deduped:
-            time_min = min(m.start_utc for m in deduped) - timedelta(minutes=30)
-            time_max = max(m.start_utc for m in deduped) + timedelta(hours=4)
-            busy = fetch_busy_intervals(service, busy_ids, time_min, time_max)
-            deduped = filter_against_busy(deduped, busy)
-            log.info("After busy-calendar filter: %d", len(deduped))
-    elif busy_ids and args.dry_run:
-        log.info("[dry-run] would query freeBusy on %s", busy_ids)
+    ics_urls = busy_ics_urls()
+    if (busy_ids or ics_urls) and not args.dry_run and deduped:
+        time_min = min(m.start_utc for m in deduped) - timedelta(minutes=30)
+        time_max = max(m.start_utc for m in deduped) + timedelta(hours=6)
+        busy: list = []
+        if busy_ids:
+            service = build_calendar_service()
+            busy.extend(fetch_busy_intervals(service, busy_ids, time_min, time_max))
+        if ics_urls:
+            busy.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
+        deduped = filter_against_busy(deduped, busy)
+        log.info("After busy-calendar filter: %d", len(deduped))
+    elif (busy_ids or ics_urls) and args.dry_run:
+        log.info("[dry-run] would query busy on %d google + %d ICS feeds", len(busy_ids), len(ics_urls))
 
     if not deduped and not args.no_prune:
         log.info("Nothing pushable — skipping calendar update entirely (no prune).")

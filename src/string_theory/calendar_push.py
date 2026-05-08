@@ -27,10 +27,14 @@ log = logging.getLogger(__name__)
 LONDON = ZoneInfo("Europe/London")
 
 DURATION_MINUTES = {
-    "F": 180, "SF": 180, "QF": 180,
-    "R16": 150, "R32": 120, "R64": 90, "R128": 90,
+    # Generous blocks — tennis matches routinely overrun. WTA / non-slam ATP
+    # is best-of-3 (median ~100 min, tail to 3h+), slam men's best-of-5 can
+    # exceed 5h. Better to over-block than have the calendar lie about
+    # availability.
+    "F": 300, "SF": 270, "QF": 240,
+    "R16": 210, "R32": 180, "R64": 180, "R128": 120,
 }
-DEFAULT_DURATION_MIN = 120
+DEFAULT_DURATION_MIN = 180
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
