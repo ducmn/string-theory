@@ -27,11 +27,35 @@ from .models import Match, Player
 
 log = logging.getLogger(__name__)
 
-API = "https://api.sofascore.com/api/v1"
+# Sofascore sits behind Cloudflare, which blanket-403s a lot of cloud-egress IPs
+# (GitHub Actions, AWS, GCP). The www.* host serves the same API and tends to be
+# more lenient than api.*; we list both and try in order. UA + headers below
+# imitate a real Chrome request more thoroughly than urllib's default.
+API_HOSTS = [
+    "https://www.sofascore.com/api/v1",
+    "https://api.sofascore.com/api/v1",
+]
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+BROWSER_HEADERS = {
+    "User-Agent": UA,
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Origin": "https://www.sofascore.com",
+    "Referer": "https://www.sofascore.com/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "DNT": "1",
+}
 
 ATP_RANKING_TYPE = 5
 WTA_RANKING_TYPE = 6
@@ -55,25 +79,65 @@ _ROUND_SHORT = {
 }
 
 
-def _get_json(url: str, retries: int = 3, sleep: float = 1.5) -> dict:
-    last_err: Exception | None = None
-    for attempt in range(retries):
-        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+def _decode_response(resp) -> bytes:
+    raw = resp.read()
+    enc = (resp.headers.get("Content-Encoding") or "").lower()
+    if enc == "gzip":
+        import gzip
+        return gzip.decompress(raw)
+    if enc == "deflate":
+        import zlib
+        return zlib.decompress(raw)
+    if enc == "br":
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return json.loads(r.read())
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
-            last_err = e
-            log.warning("GET %s failed (%s), retrying", url, e)
-            time.sleep(sleep * (attempt + 1))
-    raise RuntimeError(f"GET {url} failed after {retries} attempts: {last_err}")
+            import brotli  # type: ignore
+        except ImportError:
+            log.warning("brotli not installed; got br-compressed response")
+            return raw
+        return brotli.decompress(raw)
+    return raw
+
+
+def _get_json_path(path: str, retries: int = 3, sleep: float = 1.5) -> dict:
+    """Try each API_HOSTS entry; for each, retry on transient failures."""
+    last_err: Exception | None = None
+    for host in API_HOSTS:
+        url = f"{host}{path}"
+        for attempt in range(retries):
+            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    return json.loads(_decode_response(r))
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+                last_err = e
+                log.warning("GET %s failed (%s), retrying", url, e)
+                time.sleep(sleep * (attempt + 1))
+        log.warning("Host %s exhausted, trying next host", host)
+    raise RuntimeError(f"GET {path} failed across all hosts: {last_err}")
+
+
+def _get_json(url_or_path: str, retries: int = 3, sleep: float = 1.5) -> dict:
+    """Backwards-compatible: accepts either a path (preferred) or a full URL."""
+    if url_or_path.startswith("http"):
+        last_err: Exception | None = None
+        for attempt in range(retries):
+            req = urllib.request.Request(url_or_path, headers=BROWSER_HEADERS)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    return json.loads(_decode_response(r))
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+                last_err = e
+                log.warning("GET %s failed (%s), retrying", url_or_path, e)
+                time.sleep(sleep * (attempt + 1))
+        raise RuntimeError(f"GET {url_or_path} failed after {retries} attempts: {last_err}")
+    return _get_json_path(url_or_path, retries=retries, sleep=sleep)
 
 
 def fetch_rankings() -> dict[int, int]:
     """Return {sofa_team_id -> ranking} for top-ranked ATP+WTA singles players."""
     out: dict[int, int] = {}
     for tour_type in (ATP_RANKING_TYPE, WTA_RANKING_TYPE):
-        data = _get_json(f"{API}/rankings/type/{tour_type}")
+        data = _get_json_path(f"/rankings/type/{tour_type}")
         for row in data.get("rankings", []):
             team = row.get("team") or {}
             tid = team.get("id")
@@ -86,7 +150,7 @@ def fetch_rankings() -> dict[int, int]:
 
 def fetch_scheduled_events(date: str) -> list[dict]:
     """Raw events for a given calendar date (YYYY-MM-DD)."""
-    return _get_json(f"{API}/sport/tennis/scheduled-events/{date}").get("events", [])
+    return _get_json_path(f"/sport/tennis/scheduled-events/{date}").get("events", [])
 
 
 def _round_short(name: str) -> str:
