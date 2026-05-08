@@ -64,7 +64,11 @@ def _tournament_display(slug: str) -> str:
 def event_title(m: Match) -> str:
     a = m.player_a.short_name or m.player_a.full_name
     b = m.player_b.short_name or m.player_b.full_name
-    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short} ({m.surface})"
+    bcaster = uk_broadcaster(m.tournament_slug)
+    return (
+        f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short} "
+        f"({m.surface}) — {bcaster}"
+    )
 
 
 def event_description(m: Match) -> str:
@@ -73,14 +77,14 @@ def event_description(m: Match) -> str:
     rank_a = m.player_a.ranking or "NR"
     rank_b = m.player_b.ranking or "NR"
     return "\n".join([
+        f"📺 Watch (UK): {uk_broadcaster(m.tournament_slug)}",
+        f"📊 Live score: https://www.sofascore.com/event/{m.sofa_id}",
+        "",
         f"{m.tournament_name} ({m.tournament_tier}, {m.round_name}, {m.surface})",
         f"{m.player_a.full_name} (#{rank_a}, {m.player_a.country_code}) "
         f"vs {m.player_b.full_name} (#{rank_b}, {m.player_b.country_code})",
         "",
         f"Score: {bd.get('total', m.score)} = {breakdown_str}",
-        "",
-        f"Where to watch (UK): {uk_broadcaster(m.tournament_slug)}",
-        f"Live score: https://www.sofascore.com/event/{m.sofa_id}",
         "",
         f"key: {legible_event_key(m)}",
     ])
@@ -96,6 +100,10 @@ def match_to_event(m: Match) -> dict:
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),
+        # Location field shows up in Google Calendar's compact agenda view
+        # next to the event time, so the broadcaster is visible at a glance
+        # without expanding the event.
+        "location": uk_broadcaster(m.tournament_slug),
         "description": event_description(m),
         "start": {"dateTime": start.isoformat(), "timeZone": "Europe/London"},
         "end": {"dateTime": end.isoformat(), "timeZone": "Europe/London"},

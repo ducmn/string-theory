@@ -109,6 +109,24 @@ Djokovic-vs-Prižmić acceptance case.
 6. Find the calendar ID under Calendar Settings → Integrate calendar →
    Calendar ID. Save it as `TARGET_CALENDAR_ID`.
 
+## Run locally on macOS via launchd (alternative to GitHub Actions)
+
+If you don't want to deploy the Cloudflare Worker (next section), running the
+cron from your Mac is the simplest path — your residential IP can hit
+Sofascore directly. A sample plist is included as
+[`launchd/com.ducmn.string-theory.plist`](launchd/com.ducmn.string-theory.plist) in this repo. Copy it into
+`~/Library/LaunchAgents/`, edit the `EnvironmentVariables` dict to point at
+your service-account JSON and calendar ID, then:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.ducmn.string-theory.plist
+launchctl start com.ducmn.string-theory   # one-shot to verify
+tail -f /tmp/string-theory.log
+```
+
+Logs go to `/tmp/string-theory.log`. The plist runs every 3 hours, on the
+hour. Disable with `launchctl unload ~/Library/LaunchAgents/com.ducmn.string-theory.plist`.
+
 ## The Cloudflare Worker proxy (one-time, ~5 min)
 
 Sofascore is on Cloudflare, which 403s **all** GitHub Actions egress IPs
