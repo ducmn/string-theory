@@ -66,28 +66,123 @@ def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
 
 def fetch_busy_intervals(service, calendar_ids: list[str], time_min: datetime, time_max: datetime
                          ) -> list[tuple[datetime, datetime]]:
-    """Single batched freeBusy.query for all given calendars."""
-    body = {
-        "timeMin": time_min.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "timeMax": time_max.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "items": [{"id": cid} for cid in calendar_ids],
-    }
-    res = service.freebusy().query(body=body).execute()
+    """Pull busy intervals from each Google calendar via `events.list`.
+
+    Uses events.list (not freeBusy) so we get event titles — needed to apply
+    BUSY_EXCEPTIONS like 'improv show on Sat = 4–6pm is actually free'.
+    """
     out: list[tuple[datetime, datetime]] = []
-    for cid, info in (res.get("calendars") or {}).items():
-        errs = info.get("errors")
-        if errs:
-            log.warning("freeBusy error for %s: %s", cid, errs)
-            continue
-        for b in info.get("busy", []):
-            try:
-                s = datetime.fromisoformat(b["start"].replace("Z", "+00:00"))
-                e = datetime.fromisoformat(b["end"].replace("Z", "+00:00"))
-                out.append((s, e))
-            except Exception as ex:
-                log.warning("could not parse busy interval %s: %s", b, ex)
+    time_min_str = time_min.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    time_max_str = time_max.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    for cid in calendar_ids:
+        try:
+            page_token = None
+            events: list[tuple[str, datetime, datetime]] = []
+            while True:
+                resp = service.events().list(
+                    calendarId=cid,
+                    timeMin=time_min_str,
+                    timeMax=time_max_str,
+                    singleEvents=True,
+                    orderBy="startTime",
+                    pageToken=page_token,
+                    maxResults=2500,
+                    fields="items(summary,start,end,status,transparency),nextPageToken",
+                ).execute()
+                for ev in resp.get("items", []):
+                    if ev.get("status") == "cancelled":
+                        continue
+                    if ev.get("transparency") == "transparent":  # "Free" events
+                        continue
+                    s = _parse_event_dt(ev.get("start"))
+                    e = _parse_event_dt(ev.get("end"))
+                    if not s or not e:
+                        continue
+                    events.append((ev.get("summary", "") or "", s, e))
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
+            out.extend(apply_busy_exceptions(events))
+        except Exception as ex:
+            log.warning("events.list failed for %s: %s", cid, ex)
     log.info("Busy intervals across %d calendars: %d", len(calendar_ids), len(out))
     return out
+
+
+def _parse_event_dt(slot: dict | None) -> datetime | None:
+    if not slot:
+        return None
+    raw = slot.get("dateTime") or slot.get("date")
+    if not raw:
+        return None
+    try:
+        if "T" in raw:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return datetime.fromisoformat(raw + "T00:00:00+00:00")
+    except ValueError:
+        return None
+
+
+# --- Busy exceptions --------------------------------------------------------
+
+import re
+from datetime import time as dtime
+
+
+BUSY_EXCEPTIONS: list[dict] = [
+    {
+        # User's improv show is on Sat with travel + dinner padding around it,
+        # but only 16:00–18:00 London is the actual show — they're happy to
+        # watch tennis in that window.
+        "title_pattern": re.compile(r"improv\s*show", re.IGNORECASE),
+        "weekday": 5,  # Saturday (Monday=0)
+        "free_local": (dtime(16, 0), dtime(18, 0)),
+    },
+]
+
+
+def apply_busy_exceptions(events: list[tuple[str, datetime, datetime]]
+                          ) -> list[tuple[datetime, datetime]]:
+    """Convert (title, start, end) events to busy intervals, excising the
+    'free_local' window for any event whose title and weekday match a rule."""
+    out: list[tuple[datetime, datetime]] = []
+    for title, start, end in events:
+        rule = _match_exception(title, start)
+        if rule is None:
+            out.append((start, end))
+            continue
+        free_s, free_e = _local_window_to_utc(start, rule["free_local"])
+        if start < free_s:
+            out.append((start, min(free_s, end)))
+        if free_e < end:
+            out.append((max(free_e, start), end))
+        log.info("Applied exception %r to %s — split around %s–%s",
+                 rule["title_pattern"].pattern, title, free_s.isoformat(), free_e.isoformat())
+    return out
+
+
+def _match_exception(title: str, start_utc: datetime) -> dict | None:
+    if not title:
+        return None
+    local_dow = start_utc.astimezone(LONDON).weekday()
+    for rule in BUSY_EXCEPTIONS:
+        if rule["weekday"] != local_dow:
+            continue
+        if rule["title_pattern"].search(title):
+            return rule
+    return None
+
+
+def _local_window_to_utc(reference_utc: datetime,
+                          free_local: tuple[dtime, dtime]
+                          ) -> tuple[datetime, datetime]:
+    local_date = reference_utc.astimezone(LONDON).date()
+    s_local = datetime.combine(local_date, free_local[0]).replace(tzinfo=LONDON)
+    e_local = datetime.combine(local_date, free_local[1]).replace(tzinfo=LONDON)
+    return s_local.astimezone(timezone.utc), e_local.astimezone(timezone.utc)
 
 
 def filter_against_busy(matches: list[Match], busy: list[tuple[datetime, datetime]]) -> list[Match]:
@@ -139,9 +234,7 @@ def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: date
     Stdlib-only by design — no icalendar pip dep — to keep the artefact small.
     """
     import urllib.request
-    from zoneinfo import ZoneInfo
 
-    LONDON = ZoneInfo("Europe/London")
     out: list[tuple[datetime, datetime]] = []
     skipped_allday = 0
     skipped_long = 0

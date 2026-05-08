@@ -109,6 +109,36 @@ Djokovic-vs-Prižmić acceptance case.
 6. Find the calendar ID under Calendar Settings → Integrate calendar →
    Calendar ID. Save it as `TARGET_CALENDAR_ID`.
 
+## Full-automation tradeoffs
+
+There's an ugly truth in the data layer: Sofascore (the upstream API) sits behind
+Cloudflare and 403s **every GitHub Actions egress IP** regardless of TLS/headers.
+Bypassing it requires a proxy that runs on infrastructure Cloudflare doesn't
+blanket-block — and on free-tier accounts I've found:
+
+- **Cloudflare Workers** — natural fit (CF won't block CF), but new accounts'
+  `workers.dev` SSL provisioning sometimes stalls indefinitely.
+- **Deno Deploy v2** — fast deploy, but unverified-org accounts hit a 403 bot
+  challenge on direct API requests, and per-app subdomains aren't covered by
+  the wildcard cert.
+
+Until one of those gets unstuck, **the cron runs locally on macOS via launchd**.
+That works perfectly while the Mac is awake but pauses when it sleeps.
+
+For *truly* always-on automation you have three options, in order of effort:
+
+1. **Run on AC + prevent automatic sleep** — System Settings → Battery → Power
+   Adapter → "Prevent automatic sleeping when display is off" ON. Lid closed
+   on AC = Mac stays awake = launchd keeps firing.
+
+2. **Deploy the included Cloudflare Worker proxy** — when CF's SSL provisioning
+   does eventually catch up, set `SOFASCORE_PROXY_BASE` to the Worker URL and
+   uncomment the cron line in `.github/workflows/daily.yml`.
+
+3. **Pay $5/mo for a small VPS** (Fly.io, Hetzner, DigitalOcean droplet) and
+   run `python -m string_theory.main` from a systemd timer there. Zero local
+   dependency, fully always-on.
+
 ## Run locally on macOS via launchd (alternative to GitHub Actions)
 
 If you don't want to deploy the Cloudflare Worker (next section), running the

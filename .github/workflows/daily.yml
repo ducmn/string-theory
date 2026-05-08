@@ -1,12 +1,14 @@
 name: refresh
 
+# Schedule disabled — Sofascore on Cloudflare 403s every GitHub Actions
+# egress IP regardless of TLS/headers, and a free Cloudflare Worker proxy
+# would be the unblocker but new accounts' workers.dev SSL provisioning
+# is currently stuck. Local launchd job on the user's Mac runs the cron
+# instead. Re-enable schedule once a working proxy is in place — set
+# SOFASCORE_PROXY_BASE secret and uncomment the cron line below.
 on:
-  schedule:
-    # Every 3 hours. Order-of-play updates roll out through the day
-    # (evening sessions are often only confirmed mid-afternoon, rain-delays
-    # reshuffle later rounds). Idempotent + orphan-cleanup means re-runs
-    # silently pick up schedule changes.
-    - cron: "0 */3 * * *"
+  # schedule:
+  #   - cron: "0 */3 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
