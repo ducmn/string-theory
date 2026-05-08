@@ -18,7 +18,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-from .calendar_push import DEFAULT_DURATION_MIN, DURATION_MINUTES
+from .calendar_push import DEFAULT_DURATION_MIN, DURATION_MINUTES, LONDON, _clip_to_bedtime
 from .models import Match
 
 log = logging.getLogger(__name__)
@@ -26,7 +26,11 @@ log = logging.getLogger(__name__)
 
 def match_interval(m: Match) -> tuple[datetime, datetime]:
     start = m.start_utc
-    end = start + timedelta(minutes=DURATION_MINUTES.get(m.round_short, DEFAULT_DURATION_MIN))
+    start_local = start.astimezone(LONDON)
+    raw_end_local = start_local + timedelta(
+        minutes=DURATION_MINUTES.get(m.round_short, DEFAULT_DURATION_MIN)
+    )
+    end = _clip_to_bedtime(start_local, raw_end_local).astimezone(start.tzinfo)
     return start, end
 
 

@@ -26,6 +26,20 @@ log = logging.getLogger(__name__)
 
 LONDON = ZoneInfo("Europe/London")
 
+# Cap every event end at 22:30 London — past that, the user is asleep.
+# An 18:00 BST 3h match would otherwise run to 21:00 (fine), a 21:00 BST
+# match to 00:00 (not fine) — we clip the latter to a 21:00–22:30 block.
+WATCH_END_HOUR = 22
+WATCH_END_MIN = 30
+
+
+def _clip_to_bedtime(start_local, end_local):
+    """Cap end_local at 22:30 on start_local's *date*. Caller guarantees
+    start_local is already < 22:30 (enforced by the watch-window filter)."""
+    cap = start_local.replace(hour=WATCH_END_HOUR, minute=WATCH_END_MIN, second=0, microsecond=0)
+    return min(end_local, cap)
+
+
 DURATION_MINUTES = {
     # Generous blocks — tennis matches routinely overrun. WTA / non-slam ATP
     # is best-of-3 (median ~100 min, tail to 3h+), slam men's best-of-5 can
@@ -95,7 +109,7 @@ def _duration(round_short: str) -> timedelta:
 
 def match_to_event(m: Match) -> dict:
     start = m.start_utc.astimezone(LONDON)
-    end = start + _duration(m.round_short)
+    end = _clip_to_bedtime(start, start + _duration(m.round_short))
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),

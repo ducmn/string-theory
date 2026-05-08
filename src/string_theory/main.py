@@ -42,22 +42,16 @@ from .scrape import fetch_upcoming_matches
 log = logging.getLogger("string_theory")
 
 LONDON = ZoneInfo("Europe/London")
-WATCH_WINDOW_START = dtime(7, 0)   # inclusive, London local
-WATCH_WINDOW_END = dtime(1, 0)     # exclusive, London local
+WATCH_WINDOW_START = dtime(7, 0)    # inclusive, London local
+WATCH_WINDOW_END = dtime(22, 30)    # exclusive — past this, the user's asleep
 
 
 def is_in_watch_window(m: Match) -> bool:
-    """True if the match starts between 07:00 (incl.) and 01:00 (excl.) Europe/London.
-
-    The 'dead window' is roughly 01:00–07:00 London — i.e. Asian-swing 6 a.m.
-    matches get filtered out so we don't push uneye-friendly mornings.
-    """
+    """True if the match's *start* is between 07:00 (incl.) and 22:30 (excl.)
+    Europe/London. Past 22:30 we don't bother — even a short block would push
+    into bedtime."""
     local = m.start_utc.astimezone(LONDON).time()
-    if WATCH_WINDOW_START <= local:
-        return True
-    if local < WATCH_WINDOW_END:
-        return True
-    return False
+    return WATCH_WINDOW_START <= local < WATCH_WINDOW_END
 
 
 def select_matches(matches: Iterable[Match]) -> list[Match]:

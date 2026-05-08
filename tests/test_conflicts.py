@@ -160,6 +160,21 @@ def test_ics_busy_blocks_a_match():
     assert out == []
 
 
+def test_match_interval_clips_at_bedtime():
+    """A match starting at 21:30 BST has its event-block end clipped at 22:30 BST,
+    not the natural 00:30 BST that 3h would imply."""
+    from zoneinfo import ZoneInfo
+    from string_theory.conflicts import match_interval
+
+    LONDON = ZoneInfo("Europe/London")
+    # 21:30 London (BST in May = UTC+1) = 20:30 UTC
+    start = datetime(2026, 5, 9, 20, 30, tzinfo=timezone.utc)
+    m = make_match(sofa_id=99, start=start, round_short="R32")  # 180 min default
+    s, e = match_interval(m)
+    end_local = e.astimezone(LONDON)
+    assert end_local.hour == 22 and end_local.minute == 30
+
+
 def test_favorite_wins_tiebreaker_on_overlap():
     """When two overlapping matches tie on score, the one featuring a named
     favorite (favorite_bonus > 0) keeps its slot."""
