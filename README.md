@@ -127,9 +127,13 @@ That works perfectly while the Mac is awake but pauses when it sleeps.
 
 For *truly* always-on automation you have three options, in order of effort:
 
-1. **Run on AC + prevent automatic sleep** — System Settings → Battery → Power
-   Adapter → "Prevent automatic sleeping when display is off" ON. Lid closed
-   on AC = Mac stays awake = launchd keeps firing.
+1. **Run on AC + a `caffeinate` daemon** — load the included
+   [`launchd/com.ducmn.string-theory.caffeinate.plist`](launchd/com.ducmn.string-theory.caffeinate.plist) into
+   `~/Library/LaunchAgents/` then `launchctl load` it. This keeps a
+   `caffeinate -s -i` process alive in your user session so the Mac stays
+   awake on AC even when the lid is closed (battery still sleeps — by
+   design, so we don't drain it). Combined with the cron plist, the Mac
+   becomes a reliable always-on runner as long as it's plugged in.
 
 2. **Deploy the included Cloudflare Worker proxy** — when CF's SSL provisioning
    does eventually catch up, set `SOFASCORE_PROXY_BASE` to the Worker URL and

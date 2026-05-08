@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ducmn.string-theory.caffeinate</string>
+
+    <!--
+      Keeps the Mac awake while it's on AC power, even with the lid closed,
+      so the string-theory cron (com.ducmn.string-theory) actually fires.
+
+      caffeinate flags:
+        -s  prevent SYSTEM sleep (only effective on power adapter — battery
+            still sleeps when lid closes, which is what we want)
+        -i  prevent IDLE sleep (so a long-idle but lid-open Mac on AC stays
+            awake too)
+
+      Display can still sleep — we don't pass -d.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
+        <string>-i</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/string-theory-caffeinate.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/string-theory-caffeinate.log</string>
+</dict>
+</plist>
