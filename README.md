@@ -1,0 +1,138 @@
+# string-theory
+
+An ATP/WTA tennis match curator. Every 3 hours a GitHub Actions cron pulls
+the next 2–3 days of upcoming main-tour singles matches, scores each one for
+watch-worthiness, filters to the slots an evening UK viewer would actually
+watch (07:00–01:00 Europe/London), de-overlaps competing matches (highest
+score wins), drops anything that conflicts with the user's personal/work
+calendars, and upserts the survivors as events into a dedicated Google
+Calendar. Anything pushed by an earlier run that no longer qualifies gets
+pruned.
+
+State lives in the calendar via deterministic event IDs — re-runs update
+existing events instead of duplicating, so it's safe to fire the cron more
+than once a day, or kick a manual run from the Actions tab.
+
+```
+sofascore  ─►  scrape.py  ─►  Match  ─►  score.py  ─►  filter (window+threshold)
+                                                            │
+                                                            ▼
+                                       calendar_push.py  ─►  Google Calendar
+```
+
+## Why Sofascore as the data source
+
+The original spec preferred official tour APIs. The reality:
+
+- **api.wtatennis.com** is a clean Pulselive-backed JSON API. Works fine.
+- **atptour.com** is locked behind Akamai bot protection — every direct
+  fetch returns HTTP 403, including via WebFetch.
+
+Maintaining two scrapers (one for WTA, a tortuous one for ATP) is more code
+than this project is worth. **api.sofascore.com** ships a single schema
+covering both tours, no API key, with all the fields we need
+(`startTimestamp`, `tennisPoints` for tier, `roundInfo`, `eventFilters` for
+singles/doubles, team IDs that join cleanly to the rankings endpoint).
+
+If Sofascore breaks the schema, [`src/string_theory/scrape.py`](src/string_theory/scrape.py) is the only file that
+needs to change.
+
+## Scoring
+
+Hardcoded weights, easy to tune in [`src/string_theory/score.py`](src/string_theory/score.py):
+
+```
+score = tier + round + ranking + favorite + headliner
+
+tier_weight:    GS=5  M1000/W1000=4  ATP500/WTA500=3  ATP250/WTA250=1
+round_weight:   F=5  SF=4  QF=3  R16=2  R32=1  R64=0.5  earlier=0
+ranking_score:  both top10=5  top10 vs top20=3  both top50=2  both top100=1  else 0
+favorite_bonus: +2 if Sinner / Alcaraz / Sabalenka / Gauff / Świątek /
+                Draper / Raducanu / Learner Tien is in the match
+headliner_bonus: +2 if either player is currently top-5 (catches Djokovic
+                vs Prižmić in an M1000 R64 — would otherwise score 5.5 and
+                fall under threshold)
+```
+
+Push if `score >= 6.0`.
+
+## Calendar event format
+
+- **Title**: `Sinner vs Alcaraz, Madrid R16 (clay)`
+- **Description**: full tournament name, both players with rankings + nationality, score breakdown, UK broadcaster, live-score URL
+- **Time**: scheduled start in Europe/London. Duration scales with round (R64 = 90m, QF/SF/F = 3h)
+- **Event ID**: `st<sha1(legible-key)>` — deterministic, idempotent, fits Google Calendar's `[a-v0-9]{5,1024}` constraint
+- **Where to watch (UK)**: hand-curated mapping in [`broadcaster.py`](src/string_theory/broadcaster.py).
+  Wimbledon → BBC iPlayer, Roland Garros / Australian Open → TNT Sports on HBO Max, everything else → NowTV.
+
+## Run locally
+
+```bash
+pip install -e .[dev]
+
+# Show what would be pushed without writing to the calendar
+GOOGLE_SERVICE_ACCOUNT_JSON=./service-account.json \
+TARGET_CALENDAR_ID=<your-calendar-id>@group.calendar.google.com \
+  python -m string_theory.main --dry-run
+
+# Push for real
+GOOGLE_SERVICE_ACCOUNT_JSON=./service-account.json \
+TARGET_CALENDAR_ID=<your-calendar-id>@group.calendar.google.com \
+  python -m string_theory.main
+
+# Show top 30 candidates with scores (no filter, no push) — for tuning
+PYTHONPATH=src python -m string_theory.main --dry-run --all
+```
+
+`GOOGLE_SERVICE_ACCOUNT_JSON` accepts either a path to the JSON file or the
+JSON content inline (useful for GitHub Actions secrets).
+
+## Tests
+
+```bash
+pytest -q
+```
+
+Covers the scoring function and a regression test for the
+Djokovic-vs-Prižmić acceptance case.
+
+## GCP setup (one-off)
+
+1. Create a new Google Cloud project (or pick an existing one).
+2. Enable the **Google Calendar API**.
+3. Create a **service account**. Download its JSON key — that's the file
+   referenced by `GOOGLE_SERVICE_ACCOUNT_JSON`.
+4. Create a dedicated Google Calendar (e.g. "Tennis").
+5. **Share the calendar with the service account's email** (looks like
+   `<name>@<project>.iam.gserviceaccount.com`) and grant
+   "Make changes to events". This is the step everyone forgets.
+6. Find the calendar ID under Calendar Settings → Integrate calendar →
+   Calendar ID. Save it as `TARGET_CALENDAR_ID`.
+
+## GitHub Actions setup
+
+Two required repository secrets:
+
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the entire JSON file contents
+- `TARGET_CALENDAR_ID` — the calendar ID from step 6 above
+
+Optional:
+
+- `BUSY_CALENDAR_IDS` — comma-separated list of calendar IDs to consult for
+  conflicts (e.g. your personal Gmail calendar + your work calendar). For each
+  candidate match, we query Google's freeBusy API; if any of those calendars
+  shows you busy during the match window, the match is skipped instead of
+  being pushed. **The service account email must be granted "See all event
+  details" on each of those calendars.**
+
+The workflow at [`.github/workflows/daily.yml`](.github/workflows/daily.yml) runs every 3 hours and exposes a
+manual `workflow_dispatch` trigger with a dry-run toggle. A separate `test`
+job runs `pytest` on every push.
+
+## Out of scope (v1)
+
+- Conflict-checking against my main calendar — push to a separate "Tennis"
+  calendar instead, my eyes do the resolution.
+- LLM-based scoring — v2.
+- In-match push notifications, live score streaming.
+- Doubles, mixed doubles, Challengers.

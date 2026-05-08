@@ -1,0 +1,60 @@
+name: refresh
+
+on:
+  schedule:
+    # Every 3 hours. Order-of-play updates roll out through the day
+    # (evening sessions are often only confirmed mid-afternoon, rain-delays
+    # reshuffle later rounds). Idempotent + orphan-cleanup means re-runs
+    # silently pick up schedule changes.
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (don't write to calendar)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          TARGET_CALENDAR_ID: ${{ secrets.TARGET_CALENDAR_ID }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python -m string_theory.main --dry-run
+          else
+            python -m string_theory.main
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+          pytest -q
