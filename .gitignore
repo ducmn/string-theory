@@ -24,3 +24,6 @@ env/
 .idea/
 *.swp
 .DS_Store
+
+# Wrangler local cache
+worker/.wrangler/
