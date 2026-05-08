@@ -21,6 +21,11 @@ classifiers = [
 dependencies = [
   "google-api-python-client>=2.120",
   "google-auth>=2.27",
+  # Sofascore is on Cloudflare which 403s plain Python HTTP clients (incl.
+  # urllib, requests, httpx) by JA3/TLS fingerprint, not just headers —
+  # particularly from cloud-egress IPs like GitHub Actions runners.
+  # curl_cffi forwards a real Chrome TLS fingerprint and slips through.
+  "curl_cffi>=0.7",
 ]
 
 [project.optional-dependencies]

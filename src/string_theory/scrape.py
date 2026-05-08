@@ -10,55 +10,35 @@ widely used by community projects. We pick it as the v1 data source because:
   via `tennisPoints`, round via `roundInfo.name`, singles/doubles flag via
   `eventFilters.category`, surface via `groundType`.
 
+We use `curl_cffi` to send a Chrome-style TLS fingerprint. Sofascore is
+behind Cloudflare, which 403's plain Python `urllib` (and most HTTP clients)
+based on the JA3 fingerprint, not just headers — particularly from cloud
+egress IPs like GitHub Actions. `curl_cffi` matches a real browser's
+fingerprint at the TLS layer and slips through reliably.
+
 If they ever break the schema, this module is the only thing that needs to
 change.
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
+
+from curl_cffi import requests as curl_requests
 
 from .models import Match, Player
 
 log = logging.getLogger(__name__)
 
-# Sofascore sits behind Cloudflare, which blanket-403s a lot of cloud-egress IPs
-# (GitHub Actions, AWS, GCP). We try direct hosts first; if all are blocked we
-# fall through to a public CORS proxy. The proxy is best-effort — if it ever
-# goes away, set SOFASCORE_PROXY_BASE in the environment to override.
-DIRECT_HOSTS = [
-    "https://www.sofascore.com/api/v1",
-    "https://api.sofascore.com/api/v1",
-]
-DEFAULT_PROXY = "https://api.allorigins.win/raw?url="
-API_HOSTS = DIRECT_HOSTS  # kept for backwards compat with any existing imports
-UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-BROWSER_HEADERS = {
-    "User-Agent": UA,
+API = "https://www.sofascore.com/api/v1"
+IMPERSONATE = "chrome"
+HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
     "Origin": "https://www.sofascore.com",
     "Referer": "https://www.sofascore.com/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
-    "DNT": "1",
 }
 
 ATP_RANKING_TYPE = 5
@@ -83,84 +63,22 @@ _ROUND_SHORT = {
 }
 
 
-def _decode_response(resp) -> bytes:
-    raw = resp.read()
-    enc = (resp.headers.get("Content-Encoding") or "").lower()
-    if enc == "gzip":
-        import gzip
-        return gzip.decompress(raw)
-    if enc == "deflate":
-        import zlib
-        return zlib.decompress(raw)
-    if enc == "br":
-        try:
-            import brotli  # type: ignore
-        except ImportError:
-            log.warning("brotli not installed; got br-compressed response")
-            return raw
-        return brotli.decompress(raw)
-    return raw
-
-
-def _try_get(url: str, retries: int, sleep: float, headers: dict) -> dict | Exception:
+def _get_json_path(path: str, retries: int = 3, sleep: float = 1.5) -> dict:
+    """Fetch a Sofascore API path with browser-fingerprint TLS via curl_cffi."""
+    url = f"{API}{path}"
     last_err: Exception = RuntimeError("not attempted")
     for attempt in range(retries):
-        req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return json.loads(_decode_response(r))
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+            r = curl_requests.get(url, headers=HEADERS, impersonate=IMPERSONATE, timeout=20)
+            if r.status_code == 200:
+                return r.json()
+            last_err = RuntimeError(f"HTTP {r.status_code}")
+            log.warning("GET %s -> %s, retrying", url, r.status_code)
+        except Exception as e:  # curl_cffi raises its own exception types
             last_err = e
             log.warning("GET %s failed (%s), retrying", url, e)
-            time.sleep(sleep * (attempt + 1))
-    return last_err
-
-
-def _get_json_path(path: str, retries: int = 3, sleep: float = 1.5) -> dict:
-    """Try direct hosts; if all fail with 403/blocked, fall through to a CORS proxy.
-
-    GitHub Actions egress IPs are blanket-403'd by Cloudflare on the direct
-    Sofascore hosts. The public proxy (https://api.allorigins.win/raw) gives
-    us a fallback path. Set SOFASCORE_PROXY_BASE to override the proxy URL.
-    """
-    last_err: Exception = RuntimeError("not attempted")
-    for host in DIRECT_HOSTS:
-        result = _try_get(f"{host}{path}", retries=retries, sleep=sleep, headers=BROWSER_HEADERS)
-        if not isinstance(result, Exception):
-            return result
-        last_err = result
-        log.warning("Host %s exhausted, trying next", host)
-
-    proxy_base = os.environ.get("SOFASCORE_PROXY_BASE", DEFAULT_PROXY)
-    if proxy_base:
-        target = urllib.parse.quote(f"{DIRECT_HOSTS[0]}{path}", safe="")
-        proxy_url = f"{proxy_base}{target}"
-        log.warning("Direct hosts blocked, trying proxy %s", proxy_base)
-        # Most public proxies don't like Origin/Referer mirroring our app.
-        proxy_headers = {"User-Agent": UA, "Accept": "application/json,*/*"}
-        result = _try_get(proxy_url, retries=retries, sleep=sleep, headers=proxy_headers)
-        if not isinstance(result, Exception):
-            return result
-        last_err = result
-
-    raise RuntimeError(f"GET {path} failed across all hosts and proxy: {last_err}")
-
-
-def _get_json(url_or_path: str, retries: int = 3, sleep: float = 1.5) -> dict:
-    """Backwards-compatible: accepts either a path (preferred) or a full URL."""
-    if url_or_path.startswith("http"):
-        last_err: Exception | None = None
-        for attempt in range(retries):
-            req = urllib.request.Request(url_or_path, headers=BROWSER_HEADERS)
-            try:
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    return json.loads(_decode_response(r))
-            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
-                last_err = e
-                log.warning("GET %s failed (%s), retrying", url_or_path, e)
-                time.sleep(sleep * (attempt + 1))
-        raise RuntimeError(f"GET {url_or_path} failed after {retries} attempts: {last_err}")
-    return _get_json_path(url_or_path, retries=retries, sleep=sleep)
+        time.sleep(sleep * (attempt + 1))
+    raise RuntimeError(f"GET {path} failed after {retries} attempts: {last_err}")
 
 
 def fetch_rankings() -> dict[int, int]:
