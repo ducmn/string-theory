@@ -109,6 +109,30 @@ Djokovic-vs-Prižmić acceptance case.
 6. Find the calendar ID under Calendar Settings → Integrate calendar →
    Calendar ID. Save it as `TARGET_CALENDAR_ID`.
 
+## The Cloudflare Worker proxy (one-time, ~5 min)
+
+Sofascore is on Cloudflare, which 403s **all** GitHub Actions egress IPs
+regardless of TLS fingerprint or headers. Cloudflare's own egress isn't
+blocked (because it *is* Cloudflare). [`worker/sofascore-proxy.js`](worker/sofascore-proxy.js) is a ~30-line
+Worker that forwards requests; it's free up to 100k requests/day.
+
+```bash
+cd worker
+npx wrangler login           # one-time browser auth
+npx wrangler deploy          # publishes to <name>.<your-handle>.workers.dev
+```
+
+Take the URL it prints, append `/api/v1`, and store it as a GitHub Actions
+secret named `SOFASCORE_PROXY_BASE`:
+
+```bash
+gh secret set SOFASCORE_PROXY_BASE \
+  --body "https://sofascore-proxy.<your-handle>.workers.dev/api/v1"
+```
+
+(Locally on a residential connection the direct host works fine; setting
+this env var is only needed in cloud envs like GitHub Actions.)
+
 ## GitHub Actions setup
 
 Two required repository secrets:

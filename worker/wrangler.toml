@@ -1,0 +1,3 @@
+name = "sofascore-proxy"
+main = "sofascore-proxy.js"
+compatibility_date = "2026-05-01"

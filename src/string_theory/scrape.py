@@ -22,6 +22,7 @@ change.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -32,7 +33,7 @@ from .models import Match, Player
 
 log = logging.getLogger(__name__)
 
-API = "https://www.sofascore.com/api/v1"
+DEFAULT_API = "https://www.sofascore.com/api/v1"
 IMPERSONATE = "chrome"
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
@@ -40,6 +41,17 @@ HEADERS = {
     "Origin": "https://www.sofascore.com",
     "Referer": "https://www.sofascore.com/",
 }
+
+
+def _api_base() -> str:
+    """Sofascore API base URL.
+
+    From a residential IP, hit Sofascore directly. From a cloud-egress IP
+    (GitHub Actions, AWS, GCP) Sofascore returns 403 via Cloudflare regardless
+    of TLS fingerprint, so set SOFASCORE_PROXY_BASE to your deployed
+    Cloudflare Worker URL (see worker/sofascore-proxy.js).
+    """
+    return (os.environ.get("SOFASCORE_PROXY_BASE") or DEFAULT_API).rstrip("/")
 
 ATP_RANKING_TYPE = 5
 WTA_RANKING_TYPE = 6
@@ -65,7 +77,7 @@ _ROUND_SHORT = {
 
 def _get_json_path(path: str, retries: int = 3, sleep: float = 1.5) -> dict:
     """Fetch a Sofascore API path with browser-fingerprint TLS via curl_cffi."""
-    url = f"{API}{path}"
+    url = f"{_api_base()}{path}"
     last_err: Exception = RuntimeError("not attempted")
     for attempt in range(retries):
         try:
