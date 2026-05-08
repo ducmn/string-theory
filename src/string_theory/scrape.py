@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -28,13 +30,15 @@ from .models import Match, Player
 log = logging.getLogger(__name__)
 
 # Sofascore sits behind Cloudflare, which blanket-403s a lot of cloud-egress IPs
-# (GitHub Actions, AWS, GCP). The www.* host serves the same API and tends to be
-# more lenient than api.*; we list both and try in order. UA + headers below
-# imitate a real Chrome request more thoroughly than urllib's default.
-API_HOSTS = [
+# (GitHub Actions, AWS, GCP). We try direct hosts first; if all are blocked we
+# fall through to a public CORS proxy. The proxy is best-effort — if it ever
+# goes away, set SOFASCORE_PROXY_BASE in the environment to override.
+DIRECT_HOSTS = [
     "https://www.sofascore.com/api/v1",
     "https://api.sofascore.com/api/v1",
 ]
+DEFAULT_PROXY = "https://api.allorigins.win/raw?url="
+API_HOSTS = DIRECT_HOSTS  # kept for backwards compat with any existing imports
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -98,22 +102,48 @@ def _decode_response(resp) -> bytes:
     return raw
 
 
+def _try_get(url: str, retries: int, sleep: float, headers: dict) -> dict | Exception:
+    last_err: Exception = RuntimeError("not attempted")
+    for attempt in range(retries):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(_decode_response(r))
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+            last_err = e
+            log.warning("GET %s failed (%s), retrying", url, e)
+            time.sleep(sleep * (attempt + 1))
+    return last_err
+
+
 def _get_json_path(path: str, retries: int = 3, sleep: float = 1.5) -> dict:
-    """Try each API_HOSTS entry; for each, retry on transient failures."""
-    last_err: Exception | None = None
-    for host in API_HOSTS:
-        url = f"{host}{path}"
-        for attempt in range(retries):
-            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
-            try:
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    return json.loads(_decode_response(r))
-            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
-                last_err = e
-                log.warning("GET %s failed (%s), retrying", url, e)
-                time.sleep(sleep * (attempt + 1))
-        log.warning("Host %s exhausted, trying next host", host)
-    raise RuntimeError(f"GET {path} failed across all hosts: {last_err}")
+    """Try direct hosts; if all fail with 403/blocked, fall through to a CORS proxy.
+
+    GitHub Actions egress IPs are blanket-403'd by Cloudflare on the direct
+    Sofascore hosts. The public proxy (https://api.allorigins.win/raw) gives
+    us a fallback path. Set SOFASCORE_PROXY_BASE to override the proxy URL.
+    """
+    last_err: Exception = RuntimeError("not attempted")
+    for host in DIRECT_HOSTS:
+        result = _try_get(f"{host}{path}", retries=retries, sleep=sleep, headers=BROWSER_HEADERS)
+        if not isinstance(result, Exception):
+            return result
+        last_err = result
+        log.warning("Host %s exhausted, trying next", host)
+
+    proxy_base = os.environ.get("SOFASCORE_PROXY_BASE", DEFAULT_PROXY)
+    if proxy_base:
+        target = urllib.parse.quote(f"{DIRECT_HOSTS[0]}{path}", safe="")
+        proxy_url = f"{proxy_base}{target}"
+        log.warning("Direct hosts blocked, trying proxy %s", proxy_base)
+        # Most public proxies don't like Origin/Referer mirroring our app.
+        proxy_headers = {"User-Agent": UA, "Accept": "application/json,*/*"}
+        result = _try_get(proxy_url, retries=retries, sleep=sleep, headers=proxy_headers)
+        if not isinstance(result, Exception):
+            return result
+        last_err = result
+
+    raise RuntimeError(f"GET {path} failed across all hosts and proxy: {last_err}")
 
 
 def _get_json(url_or_path: str, retries: int = 3, sleep: float = 1.5) -> dict:
