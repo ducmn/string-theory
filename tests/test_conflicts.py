@@ -107,6 +107,45 @@ def test_ics_parsing_handles_utc_and_tzid_and_folded_lines(tmp_path, monkeypatch
     assert starts[0] == datetime(2026, 5, 9, 8, 0, tzinfo=timezone.utc)
 
 
+def test_ics_skips_all_day_and_multi_day_events(tmp_path):
+    """All-day vacation/OOO and multi-day events shouldn't block individual matches."""
+    from string_theory.conflicts import fetch_ics_busy_intervals
+
+    ics = (
+        "BEGIN:VCALENDAR\r\n"
+        # All-day OOO — should be skipped
+        "BEGIN:VEVENT\r\n"
+        "UID:ooo@test\r\n"
+        "DTSTART;VALUE=DATE:20260427\r\n"
+        "DTEND;VALUE=DATE:20260509\r\n"
+        "SUMMARY:Out of Office\r\n"
+        "END:VEVENT\r\n"
+        # Multi-day timed event (12 days) — should be skipped
+        "BEGIN:VEVENT\r\n"
+        "UID:vacation@test\r\n"
+        "DTSTART:20260501T000000Z\r\n"
+        "DTEND:20260513T000000Z\r\n"
+        "END:VEVENT\r\n"
+        # Normal 1h meeting — should be kept
+        "BEGIN:VEVENT\r\n"
+        "UID:standup@test\r\n"
+        "DTSTART:20260509T100000Z\r\n"
+        "DTEND:20260509T110000Z\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    f = tmp_path / "calendar.ics"
+    f.write_text(ics)
+
+    intervals = fetch_ics_busy_intervals(
+        [f.as_uri()],
+        datetime(2026, 5, 8, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    assert len(intervals) == 1
+    assert intervals[0][0] == datetime(2026, 5, 9, 10, 0, tzinfo=timezone.utc)
+
+
 def test_ics_busy_blocks_a_match():
     """An ICS-sourced busy interval should drop a conflicting match."""
     from string_theory.conflicts import filter_against_busy

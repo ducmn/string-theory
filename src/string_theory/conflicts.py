@@ -114,25 +114,33 @@ def busy_ics_urls() -> list[str]:
     return [u.strip() for u in raw.split(",") if u.strip()]
 
 
+# Events longer than this are treated as vacation/OOO/long-range blocks and
+# excluded from busy filtering — a 12-day "Out of Office" shouldn't pre-empt
+# every evening tennis match in that span.
+ICS_MAX_BUSY_HOURS = 18
+
+
 def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: datetime
                              ) -> list[tuple[datetime, datetime]]:
     """Pull DTSTART/DTEND from each ICS URL, return events overlapping the window.
 
     Outlook/Exchange "Publish a calendar" URLs return ICS feeds. The format
-    is RFC 5545. We only care about VEVENT blocks with DTSTART/DTEND;
-    floating times are interpreted as Europe/London (the user's local TZ).
-    All-day events (DATE-only) and recurring events that don't expand are
-    handled best-effort — the heuristic-level recurrence handling here is
-    deliberately limited; if the user finds it lossy, switch to icalendar.
+    is RFC 5545. Logic:
+    - Skip all-day events (DATE-only DTSTART) — usually vacation markers.
+    - Skip events longer than ICS_MAX_BUSY_HOURS — a multi-day OOO event
+      is not the kind of "busy" that should pre-empt a 2h tennis slot.
+    - Floating times interpreted as Europe/London.
+    - Recurrence rules are not expanded (best-effort stdlib parser).
 
-    Implementing this with stdlib only (no icalendar pip dep) keeps the
-    deployment artefact small.
+    Stdlib-only by design — no icalendar pip dep — to keep the artefact small.
     """
     import urllib.request
     from zoneinfo import ZoneInfo
 
     LONDON = ZoneInfo("Europe/London")
     out: list[tuple[datetime, datetime]] = []
+    skipped_allday = 0
+    skipped_long = 0
 
     for url in urls:
         try:
@@ -148,6 +156,9 @@ def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: date
 
         for raw_event in unfolded.split("BEGIN:VEVENT")[1:]:
             block = raw_event.split("END:VEVENT")[0]
+            if _is_allday(block, "DTSTART"):
+                skipped_allday += 1
+                continue
             start = _parse_ics_dt(block, "DTSTART", LONDON)
             end = _parse_ics_dt(block, "DTEND", LONDON)
             if start is None or end is None:
@@ -158,10 +169,28 @@ def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: date
                 end = end.replace(tzinfo=LONDON)
             if end <= time_min or start >= time_max:
                 continue
+            if (end - start).total_seconds() > ICS_MAX_BUSY_HOURS * 3600:
+                skipped_long += 1
+                continue
             out.append((start, end))
 
-    log.info("ICS busy intervals across %d feeds: %d", len(urls), len(out))
+    log.info("ICS busy intervals across %d feeds: %d  (skipped %d all-day, %d multi-day)",
+             len(urls), len(out), skipped_allday, skipped_long)
     return out
+
+
+def _is_allday(block: str, key: str) -> bool:
+    """RFC 5545 all-day events use VALUE=DATE on DTSTART, no time component."""
+    import re
+    pattern = rf"\n{key}(;[^:\n]*)?:([^\r\n]+)"
+    m = re.search(pattern, "\n" + block)
+    if not m:
+        return False
+    params = m.group(1) or ""
+    raw = m.group(2).strip()
+    if "VALUE=DATE" in params and "VALUE=DATE-TIME" not in params:
+        return True
+    return "T" not in raw  # YYYYMMDD without time
 
 
 def _parse_ics_dt(block: str, key: str, default_tz):

@@ -68,11 +68,7 @@ def _tournament_display(slug: str) -> str:
 def event_title(m: Match) -> str:
     a = m.player_a.short_name or m.player_a.full_name
     b = m.player_b.short_name or m.player_b.full_name
-    bcaster = uk_broadcaster(m.tournament_slug)
-    return (
-        f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short} "
-        f"({m.surface}) — {bcaster}"
-    )
+    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short} ({m.surface})"
 
 
 def event_description(m: Match) -> str:
@@ -81,7 +77,6 @@ def event_description(m: Match) -> str:
     rank_a = m.player_a.ranking or "NR"
     rank_b = m.player_b.ranking or "NR"
     return "\n".join([
-        f"📺 Watch (UK): {uk_broadcaster(m.tournament_slug)}",
         f"📊 Live score: https://www.sofascore.com/event/{m.sofa_id}",
         "",
         f"{m.tournament_name} ({m.tournament_tier}, {m.round_name}, {m.surface})",
@@ -147,12 +142,22 @@ def build_calendar_service():
 
 def prune_orphans(service, calendar_id: str, keep_event_ids: set[str],
                   time_min, time_max, dry_run: bool = False) -> int:
-    """Delete previously-pushed events in [time_min, time_max] no longer in selection.
+    """Delete previously-pushed events in [time_min, time_max] that are no
+    longer in the current selection AND whose start time is still in the
+    future.
+
+    Critically, we don't delete events whose start time is in the past —
+    that would yank ongoing matches out from under the user (the match has
+    started, our scrape may briefly drop it on schedule churn, the cleanup
+    would then helpfully delete it mid-watch). Past-start events stay as a
+    historical record.
 
     Identifies events created by this tool by the `st`-prefix on the event ID
     (we hash with sha1 — all IDs match `st[0-9a-f]{40}`). Anything else is
     left alone. Pass `dry_run=True` to log without actually deleting.
     """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
     deleted = 0
     page_token = None
     while True:
@@ -170,6 +175,17 @@ def prune_orphans(service, calendar_id: str, keep_event_ids: set[str],
                 continue
             if eid in keep_event_ids:
                 continue
+            start_str = (ev.get("start") or {}).get("dateTime") or (ev.get("start") or {}).get("date")
+            if start_str:
+                try:
+                    start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+                    if start_dt <= now:
+                        log.debug("keep past-start orphan %s  %s", eid, ev.get("summary", ""))
+                        continue
+                except ValueError:
+                    pass
             if dry_run:
                 log.info("[dry-run] would delete orphan %s  %s", eid, ev.get("summary", ""))
             else:

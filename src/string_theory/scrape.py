@@ -166,7 +166,11 @@ def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[M
             continue
         if not _is_main_tour(ev):
             continue
-        if (ev.get("status") or {}).get("type") != "notstarted":
+        # Include both upcoming AND in-progress matches: an ongoing match
+        # should stay in the user's calendar (with end time covered by our
+        # generous duration block) until it finishes. We never re-add a
+        # finished match.
+        if (ev.get("status") or {}).get("type") not in ("notstarted", "inprogress"):
             continue
         ts = ev.get("startTimestamp")
         if not ts:
