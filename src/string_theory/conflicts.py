@@ -132,16 +132,9 @@ import re
 from datetime import time as dtime
 
 
-BUSY_EXCEPTIONS: list[dict] = [
-    {
-        # User's improv show is on Sat with travel + dinner padding around it,
-        # but only 16:00–18:00 London is the actual show — they're happy to
-        # watch tennis in that window.
-        "title_pattern": re.compile(r"improv\s*show", re.IGNORECASE),
-        "weekday": 5,  # Saturday (Monday=0)
-        "free_local": (dtime(16, 0), dtime(18, 0)),
-    },
-]
+# Each entry: {title_pattern: re, weekday: int (Mon=0), free_local: (time, time)}.
+# Matching events get sliced so the free_local window is treated as available.
+BUSY_EXCEPTIONS: list[dict] = []
 
 
 def apply_busy_exceptions(events: list[tuple[str, datetime, datetime]]

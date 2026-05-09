@@ -160,40 +160,12 @@ def test_ics_busy_blocks_a_match():
     assert out == []
 
 
-def test_improv_show_exception_frees_4_to_6pm_saturday():
-    """A Saturday improv-show busy block should leave 16:00–18:00 London free."""
-    from zoneinfo import ZoneInfo
+def test_apply_busy_exceptions_with_no_rules_passes_through():
+    """With BUSY_EXCEPTIONS empty (the default), every event becomes a busy interval verbatim."""
     from string_theory.conflicts import apply_busy_exceptions
-
-    LONDON = ZoneInfo("Europe/London")
-    # Sat May 9 2026, 13:00 BST = 12:00 UTC; show event runs 13:00–21:00 BST.
-    sat_start_utc = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)   # 13:00 BST
-    sat_end_utc = datetime(2026, 5, 9, 20, 0, tzinfo=timezone.utc)     # 21:00 BST
-
-    intervals = apply_busy_exceptions([("Improv show at the Soho", sat_start_utc, sat_end_utc)])
-    # Should produce two slices: [13:00 BST, 16:00 BST] and [18:00 BST, 21:00 BST]
-    assert len(intervals) == 2
-    s0, e0 = intervals[0]
-    s1, e1 = intervals[1]
-    assert e0.astimezone(LONDON).hour == 16 and e0.astimezone(LONDON).minute == 0
-    assert s1.astimezone(LONDON).hour == 18 and s1.astimezone(LONDON).minute == 0
-
-
-def test_improv_show_exception_only_on_saturday():
-    """Same title on a non-Saturday is ignored — no split."""
-    from string_theory.conflicts import apply_busy_exceptions
-    # Tue May 5 2026 (a weekday)
-    s = datetime(2026, 5, 5, 12, 0, tzinfo=timezone.utc)
-    e = datetime(2026, 5, 5, 20, 0, tzinfo=timezone.utc)
-    intervals = apply_busy_exceptions([("Improv show", s, e)])
-    assert intervals == [(s, e)]
-
-
-def test_non_matching_title_passes_through():
-    from string_theory.conflicts import apply_busy_exceptions
-    s = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)  # Saturday
+    s = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
     e = datetime(2026, 5, 9, 20, 0, tzinfo=timezone.utc)
-    intervals = apply_busy_exceptions([("Brunch with friends", s, e)])
+    intervals = apply_busy_exceptions([("Anything", s, e)])
     assert intervals == [(s, e)]
 
 
