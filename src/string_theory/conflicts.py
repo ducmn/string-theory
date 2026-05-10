@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
-from .calendar_push import DEFAULT_DURATION_MIN, DURATION_MINUTES, LONDON, _clip_to_bedtime
+from .calendar_push import LONDON, _clip_to_bedtime, duration_minutes
 from .models import Match
 
 log = logging.getLogger(__name__)
@@ -27,9 +29,7 @@ log = logging.getLogger(__name__)
 def match_interval(m: Match) -> tuple[datetime, datetime]:
     start = m.start_utc
     start_local = start.astimezone(LONDON)
-    raw_end_local = start_local + timedelta(
-        minutes=DURATION_MINUTES.get(m.round_short, DEFAULT_DURATION_MIN)
-    )
+    raw_end_local = start_local + timedelta(minutes=duration_minutes(m))
     end = _clip_to_bedtime(start_local, raw_end_local).astimezone(start.tzinfo)
     return start, end
 
@@ -128,12 +128,16 @@ def _parse_event_dt(slot: dict | None) -> datetime | None:
 
 # --- Busy exceptions --------------------------------------------------------
 
-import re
-from datetime import time as dtime
-
-
-# Each entry: {title_pattern: re, weekday: int (Mon=0), free_local: (time, time)}.
+# Each entry: {title_pattern: compiled re, weekday: int (Mon=0), free_local: (time, time)}.
 # Matching events get sliced so the free_local window is treated as available.
+# Empty by default; populate with rules like:
+#   import re
+#   from datetime import time
+#   BUSY_EXCEPTIONS = [
+#       {"title_pattern": re.compile(r"yoga", re.I),
+#        "weekday": 1,  # Tue
+#        "free_local": (time(18, 0), time(19, 0))},
+#   ]
 BUSY_EXCEPTIONS: list[dict] = []
 
 
@@ -271,7 +275,6 @@ def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: date
 
 def _is_allday(block: str, key: str) -> bool:
     """RFC 5545 all-day events use VALUE=DATE on DTSTART, no time component."""
-    import re
     pattern = rf"\n{key}(;[^:\n]*)?:([^\r\n]+)"
     m = re.search(pattern, "\n" + block)
     if not m:
@@ -285,9 +288,6 @@ def _is_allday(block: str, key: str) -> bool:
 
 def _parse_ics_dt(block: str, key: str, default_tz):
     """Pull DTSTART/DTEND value from a VEVENT block. Return tz-aware datetime."""
-    import re
-    from zoneinfo import ZoneInfo
-
     # Match "DTSTART:..." or "DTSTART;TZID=Europe/London:..." etc.
     pattern = rf"\n{key}(;[^:\n]*)?:([^\r\n]+)"
     m = re.search(pattern, "\n" + block)

@@ -169,6 +169,22 @@ def test_apply_busy_exceptions_with_no_rules_passes_through():
     assert intervals == [(s, e)]
 
 
+def test_wta_match_uses_shorter_duration_than_atp():
+    """WTA matches (best-of-3) get a 2.5h R32 block; ATP gets 3h."""
+    from string_theory.conflicts import match_interval
+
+    start = datetime(2026, 5, 9, 10, 0, tzinfo=timezone.utc)
+    wta = make_match(sofa_id=1, start=start, round_short="R32")
+    wta = replace(wta, tour="wta")
+    atp = make_match(sofa_id=2, start=start, round_short="R32")
+    atp = replace(atp, tour="atp")
+
+    _, wta_end = match_interval(wta)
+    _, atp_end = match_interval(atp)
+    assert (wta_end - start).total_seconds() == 150 * 60  # 2.5h
+    assert (atp_end - start).total_seconds() == 180 * 60  # 3h
+
+
 def test_match_interval_clips_at_bedtime():
     """A match starting at 21:30 BST has its event-block end clipped at 22:30 BST,
     not the natural 00:30 BST that 3h would imply."""

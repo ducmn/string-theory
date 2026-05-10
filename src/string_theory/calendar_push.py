@@ -40,15 +40,27 @@ def _clip_to_bedtime(start_local, end_local):
     return min(end_local, cap)
 
 
-DURATION_MINUTES = {
-    # Generous blocks — tennis matches routinely overrun. WTA / non-slam ATP
-    # is best-of-3 (median ~100 min, tail to 3h+), slam men's best-of-5 can
-    # exceed 5h. Better to over-block than have the calendar lie about
-    # availability.
+# WTA is always best-of-3 (median ~100 min), so shorter blocks. ATP is
+# best-of-3 at non-slams and best-of-5 at Grand Slams (median ~150 min,
+# tail to 5h+); the ATP table is generous to cover both.
+DURATION_MINUTES_WTA = {
+    "F": 210, "SF": 180, "QF": 165,
+    "R16": 150, "R32": 150, "R64": 150, "R128": 90,
+}
+DURATION_MINUTES_ATP = {
     "F": 300, "SF": 270, "QF": 240,
     "R16": 210, "R32": 180, "R64": 180, "R128": 120,
 }
+# Kept as the legacy default for code paths that don't know the tour
+# (e.g. when something fails to populate Match.tour).
+DURATION_MINUTES = DURATION_MINUTES_ATP
 DEFAULT_DURATION_MIN = 180
+
+
+def duration_minutes(m) -> int:
+    """Pick the duration table by tour, fall back to ATP if unknown."""
+    table = DURATION_MINUTES_WTA if getattr(m, "tour", None) == "wta" else DURATION_MINUTES_ATP
+    return table.get(m.round_short, DEFAULT_DURATION_MIN)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -104,12 +116,18 @@ def event_description(m: Match) -> str:
 
 
 def _duration(round_short: str) -> timedelta:
-    return timedelta(minutes=DURATION_MINUTES.get(round_short, DEFAULT_DURATION_MIN))
+    # Legacy signature — kept tour-agnostic. Prefer _duration_for(m) when
+    # you have a Match in hand so the tour-aware table is consulted.
+    return timedelta(minutes=DURATION_MINUTES_ATP.get(round_short, DEFAULT_DURATION_MIN))
+
+
+def _duration_for(m: Match) -> timedelta:
+    return timedelta(minutes=duration_minutes(m))
 
 
 def match_to_event(m: Match) -> dict:
     start = m.start_utc.astimezone(LONDON)
-    end = _clip_to_bedtime(start, start + _duration(m.round_short))
+    end = _clip_to_bedtime(start, start + _duration_for(m))
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),
