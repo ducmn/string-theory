@@ -141,8 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     elif (busy_ids or ics_urls) and args.dry_run:
         log.info("[dry-run] would query busy on %d google + %d ICS feeds", len(busy_ids), len(ics_urls))
 
-    if not deduped and not args.no_prune:
-        log.info("Nothing pushable — skipping calendar update entirely (no prune).")
+    # Safety: only skip prune when Sofa itself returned nothing (likely
+    # outage) — NOT when our filters legitimately dropped everything. If
+    # raw had matches but they all got filtered out, the user wants the
+    # previously-pushed events that no longer qualify to be deleted too.
+    if not raw and not args.no_prune:
+        log.info("Sofa returned no candidates — skipping calendar update entirely (no prune).")
         return 0
 
     counters = upsert_matches(deduped, calendar_id=calendar_id, dry_run=args.dry_run, service=service)
