@@ -126,8 +126,13 @@ def _duration_for(m: Match) -> timedelta:
 
 
 def match_to_event(m: Match) -> dict:
-    start = m.start_utc.astimezone(LONDON)
-    end = _clip_to_bedtime(start, start + _duration_for(m))
+    if m.event_clip_start_utc and m.event_clip_end_utc:
+        # Busy-filter already determined the displayable window — honour it.
+        start = m.event_clip_start_utc.astimezone(LONDON)
+        end = _clip_to_bedtime(start, m.event_clip_end_utc.astimezone(LONDON))
+    else:
+        start = m.start_utc.astimezone(LONDON)
+        end = _clip_to_bedtime(start, start + _duration_for(m))
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),

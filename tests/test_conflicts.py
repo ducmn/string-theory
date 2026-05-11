@@ -43,12 +43,14 @@ def test_dedup_no_overlap_keeps_all():
 
 
 def test_busy_filter_drops_overlapping():
+    """When busy fully spans the match, drop (no free segment >= MIN_FREE_MINUTES)."""
     t = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
     matches = [
-        make_match(sofa_id=1, start=t),                                  # busy here
-        make_match(sofa_id=2, start=t + timedelta(hours=4)),             # free
+        make_match(sofa_id=1, start=t, round_short="R32"),               # busy spans full window
+        make_match(sofa_id=2, start=t + timedelta(hours=5)),             # free
     ]
-    busy = [(t - timedelta(minutes=30), t + timedelta(minutes=30))]      # blocks #1
+    # R32 ATP block is 180 min. Busy covers all of it.
+    busy = [(t - timedelta(minutes=30), t + timedelta(hours=4))]
     out = filter_against_busy(matches, busy)
     assert [m.sofa_id for m in out] == [2]
 
@@ -147,15 +149,16 @@ def test_ics_skips_all_day_and_multi_day_events(tmp_path):
 
 
 def test_ics_busy_blocks_a_match():
-    """An ICS-sourced busy interval should drop a conflicting match."""
+    """A long ICS-sourced busy interval that spans the whole match should drop it."""
     from string_theory.conflicts import filter_against_busy
     from zoneinfo import ZoneInfo
 
     LONDON = ZoneInfo("Europe/London")
     t = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
     matches = [make_match(sofa_id=1, start=t, round_short="R32")]
+    # R32 ATP block is 180 min; cover the whole window plus margins.
     busy = [(t.astimezone(LONDON) - timedelta(minutes=10),
-             t.astimezone(LONDON) + timedelta(minutes=20))]
+             t.astimezone(LONDON) + timedelta(hours=4))]
     out = filter_against_busy(matches, busy)
     assert out == []
 
@@ -167,6 +170,69 @@ def test_apply_busy_exceptions_with_no_rules_passes_through():
     e = datetime(2026, 5, 9, 20, 0, tzinfo=timezone.utc)
     intervals = apply_busy_exceptions([("Anything", s, e)])
     assert intervals == [(s, e)]
+
+
+def test_partial_busy_clips_match_instead_of_dropping():
+    """A 30-min meeting at the start of a 3h match should clip, not drop, the event."""
+    from string_theory.conflicts import filter_against_busy
+    # Match: 14:00–17:00 UTC (3h ATP R32 block)
+    match_start = datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc)
+    m = make_match(sofa_id=1, start=match_start, round_short="R32")
+    m = replace(m, tour="atp")  # 180 min block
+
+    # Busy: 14:00–14:30 UTC
+    busy = [(datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc),
+             datetime(2026, 5, 11, 14, 30, tzinfo=timezone.utc))]
+
+    out = filter_against_busy([m], busy)
+    assert len(out) == 1
+    kept = out[0]
+    # Should have a clip start at 14:30, end at 17:00
+    assert kept.event_clip_start_utc == datetime(2026, 5, 11, 14, 30, tzinfo=timezone.utc)
+    assert kept.event_clip_end_utc == datetime(2026, 5, 11, 17, 0, tzinfo=timezone.utc)
+
+
+def test_busy_filter_drops_when_free_segment_too_short():
+    """If the only free portion is < 60 min, drop the match."""
+    from string_theory.conflicts import filter_against_busy
+    match_start = datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc)
+    m = make_match(sofa_id=1, start=match_start, round_short="R32")
+    m = replace(m, tour="atp")  # 180 min block 14:00–17:00 UTC
+
+    # Busy 14:00–16:30 UTC — leaves only 16:30–17:00 free (30 min)
+    busy = [(datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc),
+             datetime(2026, 5, 11, 16, 30, tzinfo=timezone.utc))]
+    out = filter_against_busy([m], busy)
+    assert out == []
+
+
+def test_office_hours_blackout_tue_thu():
+    """Tue/Thu 09:00–18:00 London is blanket-skipped regardless of conflicts."""
+    from zoneinfo import ZoneInfo
+    from string_theory.models import Match, Player
+    from string_theory.main import is_in_office_hours
+
+    LONDON = ZoneInfo("Europe/London")
+    # Tue May 12 2026, 10:00 BST
+    tue_start = datetime(2026, 5, 12, 10, 0, tzinfo=LONDON)
+    p = Player(sofa_id=1, full_name="A", short_name="A", country_code="USA", slug="a")
+    q = Player(sofa_id=2, full_name="B", short_name="B", country_code="USA", slug="b")
+    m_tue = Match(sofa_id=1, tour="atp", tournament_slug="rome", tournament_name="Rome",
+                  tournament_tier="M1000", surface="clay", year=2026,
+                  round_name="R32", round_short="R32",
+                  start_utc=tue_start.astimezone(timezone.utc),
+                  player_a=p, player_b=q)
+    assert is_in_office_hours(m_tue) is True
+
+    # Wed May 13 2026, 10:00 BST — not an office day
+    wed_start = datetime(2026, 5, 13, 10, 0, tzinfo=LONDON)
+    m_wed = replace(m_tue, start_utc=wed_start.astimezone(timezone.utc))
+    assert is_in_office_hours(m_wed) is False
+
+    # Tue 19:00 BST — past office hours
+    tue_eve = datetime(2026, 5, 12, 19, 0, tzinfo=LONDON)
+    m_tue_eve = replace(m_tue, start_utc=tue_eve.astimezone(timezone.utc))
+    assert is_in_office_hours(m_tue_eve) is False
 
 
 def test_wta_match_uses_shorter_duration_than_atp():

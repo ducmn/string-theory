@@ -31,3 +31,9 @@ class Match:
     player_b: Player
     score_breakdown: dict = field(default_factory=dict)
     score: float = 0.0
+    # When a busy-event partially overlaps the natural match window, the
+    # busy filter clips the event to the largest free contiguous segment
+    # and records the clipped window here. Calendar event creation prefers
+    # these if set.
+    event_clip_start_utc: Optional[datetime] = None
+    event_clip_end_utc: Optional[datetime] = None

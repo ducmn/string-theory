@@ -45,6 +45,12 @@ LONDON = ZoneInfo("Europe/London")
 WATCH_WINDOW_START = dtime(7, 0)    # inclusive, London local
 WATCH_WINDOW_END = dtime(22, 30)    # exclusive — past this, the user's asleep
 
+# User is in the office on these weekdays (Monday=0); daytime tennis is
+# blacked out regardless of score or specific calendar conflicts.
+OFFICE_DAYS = {1, 3}                # Tue, Thu
+OFFICE_HOURS_START = dtime(9, 0)
+OFFICE_HOURS_END = dtime(18, 0)
+
 
 def is_in_watch_window(m: Match) -> bool:
     """True if the match's *start* is between 07:00 (incl.) and 22:30 (excl.)
@@ -54,6 +60,16 @@ def is_in_watch_window(m: Match) -> bool:
     return WATCH_WINDOW_START <= local < WATCH_WINDOW_END
 
 
+def is_in_office_hours(m: Match) -> bool:
+    """True if the match falls during the user's in-office window (Tue/Thu
+    09:00–18:00 London). Used to blanket-skip daytime matches on those days
+    without relying on individual calendar events."""
+    local_dt = m.start_utc.astimezone(LONDON)
+    if local_dt.weekday() not in OFFICE_DAYS:
+        return False
+    return OFFICE_HOURS_START <= local_dt.time() < OFFICE_HOURS_END
+
+
 def select_matches(matches: Iterable[Match]) -> list[Match]:
     out: list[Match] = []
     for m in matches:
@@ -61,6 +77,11 @@ def select_matches(matches: Iterable[Match]) -> list[Match]:
         if not is_pushable(scored):
             continue
         if not is_in_watch_window(scored):
+            continue
+        if is_in_office_hours(scored):
+            log.info("skip (office day): %s vs %s @ %s",
+                     scored.player_a.short_name, scored.player_b.short_name,
+                     scored.start_utc.astimezone(LONDON).strftime("%a %H:%M"))
             continue
         out.append(scored)
     out.sort(key=lambda x: x.start_utc)

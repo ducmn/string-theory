@@ -182,16 +182,58 @@ def _local_window_to_utc(reference_utc: datetime,
     return s_local.astimezone(timezone.utc), e_local.astimezone(timezone.utc)
 
 
-def filter_against_busy(matches: list[Match], busy: list[tuple[datetime, datetime]]) -> list[Match]:
+MIN_FREE_MINUTES = 60  # below this remaining-free time, skip the match entirely
+
+
+def _largest_free_segment(window: tuple[datetime, datetime],
+                          busy: list[tuple[datetime, datetime]]
+                          ) -> tuple[datetime, datetime] | None:
+    """Subtract busy intervals from `window`, return the largest free chunk."""
+    free: list[tuple[datetime, datetime]] = [window]
+    for bs, be in busy:
+        new_free: list[tuple[datetime, datetime]] = []
+        for fs, fe in free:
+            if be <= fs or bs >= fe:
+                new_free.append((fs, fe))
+                continue
+            if fs < bs:
+                new_free.append((fs, bs))
+            if be < fe:
+                new_free.append((be, fe))
+        free = new_free
+    return max(free, key=lambda x: x[1] - x[0]) if free else None
+
+
+def filter_against_busy(matches: list[Match],
+                        busy: list[tuple[datetime, datetime]],
+                        min_free_minutes: int = MIN_FREE_MINUTES) -> list[Match]:
+    """For each match, intersect its natural window with busy intervals.
+
+    - If the match window has no overlap, keep it as-is.
+    - If a partial overlap leaves a contiguous free chunk of at least
+      `min_free_minutes`, push the match clipped to that free chunk
+      (handles cases like a 14:00–14:30 meeting at the start of a 3h
+      match — push 14:30–17:00 instead of dropping the whole thing).
+    - If the largest free chunk is below threshold, drop the match.
+    """
+    from dataclasses import replace as _replace
+
     if not busy:
         return list(matches)
     out: list[Match] = []
     for m in matches:
         iv = match_interval(m)
-        if any(_overlaps(iv, b) for b in busy):
+        free = _largest_free_segment(iv, busy)
+        if free is None or (free[1] - free[0]).total_seconds() / 60 < min_free_minutes:
             log.info("skip (busy conflict): %s vs %s @ %s",
                      m.player_a.short_name, m.player_b.short_name, m.start_utc.isoformat())
             continue
+        if free != iv:
+            log.info("clip (busy partial): %s vs %s — pushing %s–%s instead of full block",
+                     m.player_a.short_name, m.player_b.short_name,
+                     free[0].astimezone(LONDON).strftime("%H:%M"),
+                     free[1].astimezone(LONDON).strftime("%H:%M"))
+            m = _replace(m, event_clip_start_utc=free[0], event_clip_end_utc=free[1])
         out.append(m)
     return out
 
