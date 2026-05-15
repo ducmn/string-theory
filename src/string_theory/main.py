@@ -27,14 +27,7 @@ from .calendar_push import (
     prune_orphans,
     upsert_matches,
 )
-from .conflicts import (
-    busy_calendar_ids,
-    busy_ics_urls,
-    fetch_busy_intervals,
-    fetch_ics_busy_intervals,
-    filter_against_busy,
-    pick_non_overlapping,
-)
+from .conflicts import pick_non_overlapping
 from .models import Match
 from .score import is_pushable, score_match
 from .scrape import fetch_upcoming_matches
@@ -117,29 +110,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     pushable = select_matches(raw)
-    log.info("Pushable after score+window: %d", len(pushable))
+    log.info("Pushable after score+window+office: %d", len(pushable))
 
     deduped = pick_non_overlapping(pushable)
     log.info("After internal de-overlap: %d", len(deduped))
 
     calendar_id = args.calendar_id or os.environ.get("TARGET_CALENDAR_ID")
-
     service = None
-    busy_ids = busy_calendar_ids()
-    ics_urls = busy_ics_urls()
-    if (busy_ids or ics_urls) and not args.dry_run and deduped:
-        time_min = min(m.start_utc for m in deduped) - timedelta(minutes=30)
-        time_max = max(m.start_utc for m in deduped) + timedelta(hours=6)
-        busy: list = []
-        if busy_ids:
-            service = build_calendar_service()
-            busy.extend(fetch_busy_intervals(service, busy_ids, time_min, time_max))
-        if ics_urls:
-            busy.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
-        deduped = filter_against_busy(deduped, busy)
-        log.info("After busy-calendar filter: %d", len(deduped))
-    elif (busy_ids or ics_urls) and args.dry_run:
-        log.info("[dry-run] would query busy on %d google + %d ICS feeds", len(busy_ids), len(ics_urls))
+    # Calendar conflict-checking (Google freeBusy + ICS) intentionally
+    # disabled per user request — just the best non-overlapping matches.
 
     # Safety: only skip prune when Sofa itself returned nothing (likely
     # outage) — NOT when our filters legitimately dropped everything. If
