@@ -204,6 +204,29 @@ def _largest_free_segment(window: tuple[datetime, datetime],
     return max(free, key=lambda x: x[1] - x[0]) if free else None
 
 
+def filter_fully_subsumed(matches: list[Match],
+                          busy: list[tuple[datetime, datetime]]) -> list[Match]:
+    """Drop a match ONLY if its entire window is covered by busy time.
+
+    Conservative conflict check: any free gap at all (start, middle, or
+    end) keeps the match, pushed with its full natural block — no
+    clipping. A match is dropped only when the user is busy for 100% of
+    its window (union of all busy intervals fully subsumes it).
+    """
+    if not busy:
+        return list(matches)
+    out: list[Match] = []
+    for m in matches:
+        iv = match_interval(m)
+        free = _largest_free_segment(iv, busy)
+        if free is None or free[1] <= free[0]:
+            log.info("skip (fully busy): %s vs %s @ %s",
+                     m.player_a.short_name, m.player_b.short_name, m.start_utc.isoformat())
+            continue
+        out.append(m)
+    return out
+
+
 def filter_against_busy(matches: list[Match],
                         busy: list[tuple[datetime, datetime]],
                         min_free_minutes: int = MIN_FREE_MINUTES) -> list[Match]:

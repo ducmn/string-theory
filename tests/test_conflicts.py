@@ -172,6 +172,34 @@ def test_apply_busy_exceptions_with_no_rules_passes_through():
     assert intervals == [(s, e)]
 
 
+def test_fully_subsumed_drops_only_when_no_free_gap():
+    """filter_fully_subsumed: drop iff the whole match window is busy."""
+    from string_theory.conflicts import filter_fully_subsumed
+    start = datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc)
+    m = make_match(sofa_id=1, start=start, round_short="R32")
+    m = replace(m, tour="atp")  # 180 min block: 14:00–17:00 UTC
+
+    # Fully covered → dropped
+    fully = [(datetime(2026, 5, 11, 13, 30, tzinfo=timezone.utc),
+              datetime(2026, 5, 11, 17, 30, tzinfo=timezone.utc))]
+    assert filter_fully_subsumed([m], fully) == []
+
+    # Partial overlap at the front → KEPT, full block, no clipping
+    partial = [(datetime(2026, 5, 11, 13, 30, tzinfo=timezone.utc),
+                datetime(2026, 5, 11, 14, 30, tzinfo=timezone.utc))]
+    out = filter_fully_subsumed([m], partial)
+    assert len(out) == 1
+    assert out[0].event_clip_start_utc is None  # not clipped
+
+    # Busy entirely inside the match (free at both ends) → KEPT
+    middle = [(datetime(2026, 5, 11, 15, 0, tzinfo=timezone.utc),
+               datetime(2026, 5, 11, 16, 0, tzinfo=timezone.utc))]
+    assert len(filter_fully_subsumed([m], middle)) == 1
+
+    # No busy at all → KEPT
+    assert len(filter_fully_subsumed([m], [])) == 1
+
+
 def test_partial_busy_clips_match_instead_of_dropping():
     """A 30-min meeting at the start of a 3h match should clip, not drop, the event."""
     from string_theory.conflicts import filter_against_busy

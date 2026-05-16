@@ -27,7 +27,14 @@ from .calendar_push import (
     prune_orphans,
     upsert_matches,
 )
-from .conflicts import pick_non_overlapping
+from .conflicts import (
+    busy_calendar_ids,
+    busy_ics_urls,
+    fetch_busy_intervals,
+    fetch_ics_busy_intervals,
+    filter_fully_subsumed,
+    pick_non_overlapping,
+)
 from .models import Match
 from .score import is_pushable, score_match
 from .scrape import fetch_upcoming_matches
@@ -112,13 +119,33 @@ def main(argv: list[str] | None = None) -> int:
     pushable = select_matches(raw)
     log.info("Pushable after score+window+office: %d", len(pushable))
 
-    deduped = pick_non_overlapping(pushable)
-    log.info("After internal de-overlap: %d", len(deduped))
-
     calendar_id = args.calendar_id or os.environ.get("TARGET_CALENDAR_ID")
     service = None
-    # Calendar conflict-checking (Google freeBusy + ICS) intentionally
-    # disabled per user request — just the best non-overlapping matches.
+
+    # Conservative conflict check: drop a match only if it's 100% covered
+    # by busy time on the personal (Google) or work (ICS) calendar. Any
+    # free gap keeps it. Run BEFORE de-overlap so the best *available*
+    # match wins each timeslot. (No clipping — full block is pushed.)
+    busy_ids = busy_calendar_ids()
+    ics_urls = busy_ics_urls()
+    if (busy_ids or ics_urls) and not args.dry_run and pushable:
+        time_min = min(m.start_utc for m in pushable) - timedelta(minutes=30)
+        time_max = max(m.start_utc for m in pushable) + timedelta(hours=6)
+        busy: list = []
+        if busy_ids:
+            service = build_calendar_service()
+            busy.extend(fetch_busy_intervals(service, busy_ids, time_min, time_max))
+        if ics_urls:
+            busy.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
+        before = len(pushable)
+        pushable = filter_fully_subsumed(pushable, busy)
+        log.info("After fully-busy filter: %d (dropped %d)", len(pushable), before - len(pushable))
+    elif (busy_ids or ics_urls) and args.dry_run:
+        log.info("[dry-run] would drop matches fully covered by %d google + %d ICS feeds",
+                 len(busy_ids), len(ics_urls))
+
+    deduped = pick_non_overlapping(pushable)
+    log.info("After internal de-overlap: %d", len(deduped))
 
     # Safety: only skip prune when Sofa itself returned nothing (likely
     # outage) — NOT when our filters legitimately dropped everything. If
