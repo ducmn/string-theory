@@ -69,15 +69,12 @@ def test_ranking_score(a, b, expected):
 
 # ---- favorite_bonus --------------------------------------------------------
 
-def test_favorite_bonus_when_either_player_favorite():
-    assert favorite_bonus("Jannik Sinner", "Random Guy") == 2.0
-    assert favorite_bonus("Random Guy", "Carlos Alcaraz") == 2.0
-    assert favorite_bonus("Random A", "Random B") == 0.0
-
-
-def test_learner_tien_is_a_favorite():
-    """Vietnamese-American ATP rising star — explicit personal pick."""
+def test_favorite_bonus_only_learner_tien():
+    """Learner Tien is the sole favorite — no one else gets the bonus."""
     assert favorite_bonus("Learner Tien", "Random Guy") == 2.0
+    assert favorite_bonus("Random Guy", "Learner Tien") == 2.0
+    assert favorite_bonus("Jannik Sinner", "Carlos Alcaraz") == 0.0
+    assert favorite_bonus("Random A", "Random B") == 0.0
 
 
 # ---- score_match end-to-end ------------------------------------------------
@@ -100,12 +97,27 @@ def test_grand_slam_final_top_players_scores_high():
         name_a="Jannik Sinner", name_b="Carlos Alcaraz",
     )
     scored = score_match(m)
-    # tier 5 + round 5 + ranking 5 + favorite 2 + headliner 2 = 19
-    assert scored.score == 19.0
+    # tier 5 + round 5 + ranking 5 + favorite 0 (not favorites anymore) +
+    # headliner 2 (both top-5) = 17
+    assert scored.score == 17.0
     assert scored.score_breakdown == {
-        "tier": 5.0, "round": 5.0, "ranking": 5.0, "favorite": 2.0, "headliner": 2.0,
-        "total": 19.0,
+        "tier": 5.0, "round": 5.0, "ranking": 5.0, "favorite": 0.0, "headliner": 2.0,
+        "total": 17.0,
     }
+
+
+def test_learner_tien_match_gets_favorite_bonus():
+    m = make_match(
+        tier="M1000", round_short="R32",
+        rank_a=21, rank_b=11,
+        name_a="Learner Tien", name_b="Alexander Bublik",
+    )
+    scored = score_match(m)
+    # tier 4 + round 1 + ranking 3 (better<=10, worse<=20... 11 & 21 -> both<=50 =2)
+    # ranking(11,21): better=11,worse=21 -> not both<=20 -> both<=50 => 2
+    # + favorite 2 (Tien) + headliner 0 = 9
+    assert scored.score_breakdown["favorite"] == 2.0
+    assert scored.score == 9.0
 
 
 def test_atp_250_first_round_unranked_scores_low():

@@ -47,8 +47,7 @@ score = tier + round + ranking + favorite + headliner
 tier_weight:    GS=5  M1000/W1000=4  ATP500/WTA500=3  ATP250/WTA250=1
 round_weight:   F=5  SF=4  QF=3  R16=2  R32=1  R64=0.5  earlier=0
 ranking_score:  both top10=5  top10 vs top20=3  both top50=2  both top100=1  else 0
-favorite_bonus: +2 if Sinner / Alcaraz / Sabalenka / Gauff / Świątek /
-                Draper / Raducanu / Learner Tien is in the match
+favorite_bonus: +2 if Learner Tien is in the match (sole personal pick)
 headliner_bonus: +2 if either player is currently top-5 (catches Djokovic
                 vs Prižmić in an M1000 R64 — would otherwise score 5.5 and
                 fall under threshold)

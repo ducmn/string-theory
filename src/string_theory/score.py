@@ -36,15 +36,9 @@ ROUND_WEIGHT = {
 }
 
 FAVORITES = {
-    "Jannik Sinner",
-    "Carlos Alcaraz",
-    "Aryna Sabalenka",
-    "Coco Gauff",
-    "Iga Swiatek",
-    "Iga Świątek",
-    "Jack Draper",
-    "Emma Raducanu",
-    # Personal pick — Vietnamese-American rising ATP player.
+    # Personal pick — Vietnamese-American rising ATP player. The only
+    # name the user wants the favorite bonus to apply to; the headliner
+    # bonus still independently rewards any current top-5 player.
     "Learner Tien",
 }
 
