@@ -180,21 +180,21 @@ def build_calendar_service():
 def prune_orphans(service, calendar_id: str, keep_event_ids: set[str],
                   time_min, time_max, dry_run: bool = False) -> int:
     """Delete previously-pushed events in [time_min, time_max] that are no
-    longer in the current selection AND whose start time is still in the
-    future.
+    longer in the current selection. Period.
 
-    Critically, we don't delete events whose start time is in the past —
-    that would yank ongoing matches out from under the user (the match has
-    started, our scrape may briefly drop it on schedule churn, the cleanup
-    would then helpfully delete it mid-watch). Past-start events stay as a
-    historical record.
+    Earlier versions tried to protect "ongoing" events (start past, end
+    future) from being yanked mid-watch, but that protection is redundant
+    now that scrape.py includes status='inprogress' matches in the
+    selection — any genuinely live match the user is watching IS in
+    keep_event_ids. The protection was just masking a real bug: when
+    the user raises the threshold or adds a blackout rule, stale events
+    from earlier runs (Auger-Aliassime at score 8 once the threshold
+    moves to 9) should be deleted even if their block hasn't elapsed.
 
     Identifies events created by this tool by the `st`-prefix on the event ID
     (we hash with sha1 — all IDs match `st[0-9a-f]{40}`). Anything else is
     left alone. Pass `dry_run=True` to log without actually deleting.
     """
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
     deleted = 0
     page_token = None
     while True:
@@ -212,17 +212,6 @@ def prune_orphans(service, calendar_id: str, keep_event_ids: set[str],
                 continue
             if eid in keep_event_ids:
                 continue
-            start_str = (ev.get("start") or {}).get("dateTime") or (ev.get("start") or {}).get("date")
-            if start_str:
-                try:
-                    start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-                    if start_dt.tzinfo is None:
-                        start_dt = start_dt.replace(tzinfo=timezone.utc)
-                    if start_dt <= now:
-                        log.debug("keep past-start orphan %s  %s", eid, ev.get("summary", ""))
-                        continue
-                except ValueError:
-                    pass
             if dry_run:
                 log.info("[dry-run] would delete orphan %s  %s", eid, ev.get("summary", ""))
             else:
