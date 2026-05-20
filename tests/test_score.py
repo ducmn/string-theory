@@ -146,17 +146,30 @@ def test_is_pushable_uses_threshold():
     assert not is_pushable(m_low)
 
 
-def test_top5_player_in_m1000_first_round_is_pushable():
-    """Acceptance test: Djokovic (#4) vs Prižmić (#79) in Rome R64 must push."""
+def test_djokovic_prizmic_m1000_r64_is_NOT_pushable_at_high_threshold():
+    """With PUSH_THRESHOLD=9, a top-5 vs unranked early-round match no longer
+    clears the bar — the user wants only the genuinely big stuff plus Tien."""
     m = make_match(
         tier="M1000", round_short="R64", rank_a=4, rank_b=79,
         name_a="Novak Djokovic", name_b="Dino Prižmić",
     )
     scored = score_match(m)
-    # 4 + 0.5 + 1 + 0 + 2 = 7.5
     assert scored.score == 7.5
+    assert not is_pushable(scored)
+
+
+def test_low_scored_tien_match_is_still_pushable_via_favorite_shortcut():
+    """Even a low-scored match featuring Tien clears the threshold."""
+    m = make_match(
+        tier="ATP250", round_short="R32", rank_a=21, rank_b=120,
+        name_a="Learner Tien", name_b="Some Qualifier",
+    )
+    scored = score_match(m)
+    # tier 1 + round 1 + ranking 0 + favorite 2 + headliner 0 = 4 — below 9
+    assert scored.score < PUSH_THRESHOLD
+    # But favorite shortcut keeps it pushable
     assert is_pushable(scored)
 
 
-def test_default_threshold_is_six():
-    assert PUSH_THRESHOLD == 6.0
+def test_default_threshold_is_nine():
+    assert PUSH_THRESHOLD == 9.0

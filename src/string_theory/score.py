@@ -13,7 +13,7 @@ from .models import Match
 
 # --- Tunable constants -------------------------------------------------------
 
-PUSH_THRESHOLD: float = 6.0
+PUSH_THRESHOLD: float = 9.0
 
 TIER_WEIGHT = {
     "GS": 5.0,
@@ -93,4 +93,9 @@ def score_match(m: Match) -> Match:
 
 
 def is_pushable(m: Match, threshold: float = PUSH_THRESHOLD) -> bool:
+    """Push if the match either features a named favorite (Tien) OR clears the
+    high score threshold. The favorite shortcut means low-scored Tien matches
+    still land — the rest of the calendar is just the genuinely big stuff."""
+    if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
+        return True
     return m.score >= threshold
