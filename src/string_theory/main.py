@@ -91,7 +91,8 @@ def select_matches(matches: Iterable[Match]) -> list[Match]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Push watch-worthy ATP/WTA matches to Google Calendar.")
     parser.add_argument("--dry-run", action="store_true", help="Print the schedule, don't write to calendar.")
-    parser.add_argument("--days-ahead", type=int, default=2, help="How many days of upcoming matches to fetch.")
+    parser.add_argument("--days-ahead", type=int, default=5,
+                        help="How many days of upcoming matches to fetch (default 5 — covers a typical week of relevant events).")
     parser.add_argument("--calendar-id", default=None, help="Override TARGET_CALENDAR_ID env var.")
     parser.add_argument("--all", action="store_true", help="Don't filter — score everything and dump (debugging).")
     parser.add_argument("--no-prune", action="store_true", help="Skip orphan deletion pass.")

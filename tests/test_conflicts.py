@@ -294,13 +294,25 @@ def test_match_interval_clips_at_bedtime():
     assert end_local.hour == 22 and end_local.minute == 30
 
 
-def test_favorite_wins_tiebreaker_on_overlap():
-    """When two overlapping matches tie on score, the one featuring a named
-    favorite (favorite_bonus > 0) keeps its slot."""
+def test_favorite_always_wins_overlap_even_against_higher_score():
+    """A favorite match wins overlap dedup regardless of score gap."""
     t = datetime(2026, 5, 10, 10, 0, tzinfo=timezone.utc)
-    a = replace(make_match(sofa_id=1, start=t, score=9.0),
-                score_breakdown={"favorite": 0.0, "total": 9.0})
-    b = replace(make_match(sofa_id=2, start=t + timedelta(minutes=10), score=9.0),
-                score_breakdown={"favorite": 2.0, "total": 9.0})
+    # Non-favorite, high score
+    a = replace(make_match(sofa_id=1, start=t, score=10.0),
+                score_breakdown={"favorite": 0.0, "total": 10.0})
+    # Favorite, lower score, overlapping start
+    b = replace(make_match(sofa_id=2, start=t + timedelta(minutes=30), score=6.0),
+                score_breakdown={"favorite": 2.0, "total": 6.0})
     kept = pick_non_overlapping([a, b])
+    assert [m.sofa_id for m in kept] == [2]
+
+
+def test_among_non_favorites_higher_score_wins():
+    """Two non-favorite overlapping matches: highest score wins."""
+    t = datetime(2026, 5, 10, 10, 0, tzinfo=timezone.utc)
+    lower = replace(make_match(sofa_id=1, start=t, score=7.0),
+                    score_breakdown={"favorite": 0.0, "total": 7.0})
+    higher = replace(make_match(sofa_id=2, start=t + timedelta(minutes=30), score=11.0),
+                     score_breakdown={"favorite": 0.0, "total": 11.0})
+    kept = pick_non_overlapping([lower, higher])
     assert [m.sofa_id for m in kept] == [2]

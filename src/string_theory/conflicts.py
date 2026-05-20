@@ -39,15 +39,18 @@ def _overlaps(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> boo
 
 
 def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
-    """Greedy: highest-scored match wins on overlap.
+    """Greedy: favorite matches always win on overlap; among non-favorites,
+    highest-scored wins. Final tiebreaker is start time.
 
-    Tiebreaker: a match featuring a named favorite (favorite_bonus > 0) wins
-    over one that doesn't. Without this, a top-5 headliner can shade a
-    favorite-vs-other on equal numeric score — surprising to the user.
+    A match featuring a named favorite (favorite_bonus > 0) sorts ahead of
+    every non-favorite regardless of score difference — the user has
+    explicitly said favorites matter more than headline scores. With one
+    favorite (Learner Tien) this is rare, but when it happens we don't
+    want a higher-scored Auger-Aliassime to evict a Tien match.
     """
     def sort_key(m: Match) -> tuple:
         fav_present = (m.score_breakdown or {}).get("favorite", 0.0) > 0
-        return (-m.score, 0 if fav_present else 1, m.start_utc)
+        return (0 if fav_present else 1, -m.score, m.start_utc)
 
     by_score = sorted(matches, key=sort_key)
     kept: list[Match] = []
