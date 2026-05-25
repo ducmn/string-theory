@@ -15,6 +15,15 @@ from .models import Match
 
 PUSH_THRESHOLD: float = 9.0
 
+# Slams are dramatic even in early rounds (5-set best-of, full stadiums,
+# historic stage). Top players vs no-name qualifiers in R128 still score
+# in the 7–8 range and the user wants them in.
+GS_PUSH_THRESHOLD: float = 7.0
+
+
+def threshold_for(m: "Match") -> float:
+    return GS_PUSH_THRESHOLD if m.tournament_tier == "GS" else PUSH_THRESHOLD
+
 TIER_WEIGHT = {
     "GS": 5.0,
     "M1000": 4.0,
@@ -92,10 +101,11 @@ def score_match(m: Match) -> Match:
     return replace(m, score=total, score_breakdown=breakdown)
 
 
-def is_pushable(m: Match, threshold: float = PUSH_THRESHOLD) -> bool:
+def is_pushable(m: Match, threshold: float | None = None) -> bool:
     """Push if the match either features a named favorite (Tien) OR clears the
-    high score threshold. The favorite shortcut means low-scored Tien matches
-    still land — the rest of the calendar is just the genuinely big stuff."""
+    tier-appropriate threshold. GS uses GS_PUSH_THRESHOLD (lower, since slams
+    are dramatic even early); everything else uses PUSH_THRESHOLD."""
     if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
         return True
-    return m.score >= threshold
+    t = threshold if threshold is not None else threshold_for(m)
+    return m.score >= t

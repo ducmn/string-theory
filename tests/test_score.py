@@ -173,3 +173,30 @@ def test_low_scored_tien_match_is_still_pushable_via_favorite_shortcut():
 
 def test_default_threshold_is_nine():
     assert PUSH_THRESHOLD == 9.0
+
+
+def test_grand_slam_uses_lower_threshold():
+    """A GS R128 top-vs-low-rank match scores ~7–8 — pushable at GS threshold."""
+    # Sabalenka (#1) vs random qualifier (#150) in RG R128
+    m = make_match(
+        tier="GS", round_short="R128", rank_a=1, rank_b=150,
+        name_a="Aryna Sabalenka", name_b="J. Bouzas Maneiro",
+    )
+    scored = score_match(m)
+    # tier 5 + round 0 + ranking 0 (one outside top-100) + favorite 0 +
+    # headliner 2 (Sabalenka top-5) = 7.0 — fails 9.0 default but clears 7.0 GS
+    assert scored.score == 7.0
+    assert is_pushable(scored)
+
+
+def test_non_gs_at_score_8_is_not_pushable():
+    """An Auger-Aliassime ATP500 R16 at score 8 stays filtered."""
+    m = make_match(
+        tier="ATP500", round_short="R16", rank_a=5, rank_b=110,
+        name_a="Felix Auger-Aliassime", name_b="Aleksandar Kovacevic",
+    )
+    scored = score_match(m)
+    # tier 3 + round 2 + ranking 0 (outside top-100) + favorite 0 +
+    # headliner 2 (Auger top-5) = 7.0 — under 9.0 ATP threshold
+    assert scored.score == 7.0
+    assert not is_pushable(scored)
