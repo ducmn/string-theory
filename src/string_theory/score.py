@@ -13,16 +13,7 @@ from .models import Match
 
 # --- Tunable constants -------------------------------------------------------
 
-PUSH_THRESHOLD: float = 9.0
-
-# Slams are dramatic even in early rounds (5-set best-of, full stadiums,
-# historic stage). Top players vs no-name qualifiers in R128 still score
-# in the 7–8 range and the user wants them in.
-GS_PUSH_THRESHOLD: float = 7.0
-
-
-def threshold_for(m: "Match") -> float:
-    return GS_PUSH_THRESHOLD if m.tournament_tier == "GS" else PUSH_THRESHOLD
+PUSH_THRESHOLD: float = 7.0
 
 TIER_WEIGHT = {
     "GS": 5.0,
@@ -45,9 +36,11 @@ ROUND_WEIGHT = {
 }
 
 FAVORITES = {
-    # Personal pick — Vietnamese-American rising ATP player. The only
-    # name the user wants the favorite bonus to apply to; the headliner
-    # bonus still independently rewards any current top-5 player.
+    # Vietnamese-American rising ATP player — sole favorite. Iga and de
+    # Minaur are landed via a lower threshold (7) instead of being named
+    # favorites, per user's calibration: "keep learner as the sole
+    # favourite, just lower the threshold for everyone else so that the
+    # current either iga or de minaur whichever is the higher still lands".
     "Learner Tien",
 }
 
@@ -101,11 +94,9 @@ def score_match(m: Match) -> Match:
     return replace(m, score=total, score_breakdown=breakdown)
 
 
-def is_pushable(m: Match, threshold: float | None = None) -> bool:
-    """Push if the match either features a named favorite (Tien) OR clears the
-    tier-appropriate threshold. GS uses GS_PUSH_THRESHOLD (lower, since slams
-    are dramatic even early); everything else uses PUSH_THRESHOLD."""
+def is_pushable(m: Match, threshold: float = PUSH_THRESHOLD) -> bool:
+    """Push if the match features a named favorite OR clears the threshold.
+    Single global threshold — same bar for slams as for everything else."""
     if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
         return True
-    t = threshold if threshold is not None else threshold_for(m)
-    return m.score >= t
+    return m.score >= threshold

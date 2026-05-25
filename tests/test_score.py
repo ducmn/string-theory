@@ -146,16 +146,16 @@ def test_is_pushable_uses_threshold():
     assert not is_pushable(m_low)
 
 
-def test_djokovic_prizmic_m1000_r64_is_NOT_pushable_at_high_threshold():
-    """With PUSH_THRESHOLD=9, a top-5 vs unranked early-round match no longer
-    clears the bar — the user wants only the genuinely big stuff plus Tien."""
+def test_djokovic_prizmic_m1000_r64_is_pushable_at_threshold_seven():
+    """At PUSH_THRESHOLD=7, a top-5 vs outside-top-50 R64 with headliner
+    bonus scores 7.5 and just clears."""
     m = make_match(
         tier="M1000", round_short="R64", rank_a=4, rank_b=79,
         name_a="Novak Djokovic", name_b="Dino Prižmić",
     )
     scored = score_match(m)
     assert scored.score == 7.5
-    assert not is_pushable(scored)
+    assert is_pushable(scored)
 
 
 def test_low_scored_tien_match_is_still_pushable_via_favorite_shortcut():
@@ -165,38 +165,46 @@ def test_low_scored_tien_match_is_still_pushable_via_favorite_shortcut():
         name_a="Learner Tien", name_b="Some Qualifier",
     )
     scored = score_match(m)
-    # tier 1 + round 1 + ranking 0 + favorite 2 + headliner 0 = 4 — below 9
+    # tier 1 + round 1 + ranking 0 + favorite 2 + headliner 0 = 4 — below 7
     assert scored.score < PUSH_THRESHOLD
     # But favorite shortcut keeps it pushable
     assert is_pushable(scored)
 
 
-def test_default_threshold_is_nine():
-    assert PUSH_THRESHOLD == 9.0
+def test_default_threshold_is_seven():
+    assert PUSH_THRESHOLD == 7.0
 
 
-def test_grand_slam_uses_lower_threshold():
-    """A GS R128 top-vs-low-rank match scores ~7–8 — pushable at GS threshold."""
-    # Sabalenka (#1) vs random qualifier (#150) in RG R128
+def test_iga_r128_score_seven_just_clears_threshold():
+    """Swiatek (#3) vs unranked qualifier in RG R128 scores 7.0 (headliner
+    bonus only — she's not a favorite). At threshold 7 it just clears."""
     m = make_match(
-        tier="GS", round_short="R128", rank_a=1, rank_b=150,
-        name_a="Aryna Sabalenka", name_b="J. Bouzas Maneiro",
+        tier="GS", round_short="R128", rank_a=3, rank_b=136,
+        name_a="Iga Swiatek", name_b="E. Jones",
     )
     scored = score_match(m)
-    # tier 5 + round 0 + ranking 0 (one outside top-100) + favorite 0 +
-    # headliner 2 (Sabalenka top-5) = 7.0 — fails 9.0 default but clears 7.0 GS
     assert scored.score == 7.0
     assert is_pushable(scored)
 
 
-def test_non_gs_at_score_8_is_not_pushable():
-    """An Auger-Aliassime ATP500 R16 at score 8 stays filtered."""
+def test_learner_tien_is_the_sole_named_favorite():
+    """User: 'keep learner as the sole favourite'."""
+    from string_theory.score import favorite_bonus, FAVORITES
+    assert FAVORITES == {"Learner Tien"}
+    assert favorite_bonus("Iga Swiatek", "Random") == 0.0
+    assert favorite_bonus("Alex de Minaur", "Random") == 0.0
+    assert favorite_bonus("Learner Tien", "Random") == 2.0
+
+
+def test_non_gs_at_score_8_is_pushable_again():
+    """At threshold 7 the boring Auger-Kovacevic 8 sneaks back in — the
+    user accepts that as the cost of catching Iga's 7.0 RG R128."""
     m = make_match(
         tier="ATP500", round_short="R16", rank_a=5, rank_b=110,
         name_a="Felix Auger-Aliassime", name_b="Aleksandar Kovacevic",
     )
     scored = score_match(m)
     # tier 3 + round 2 + ranking 0 (outside top-100) + favorite 0 +
-    # headliner 2 (Auger top-5) = 7.0 — under 9.0 ATP threshold
+    # headliner 2 (Auger top-5) = 7.0 — just clears threshold of 7
     assert scored.score == 7.0
-    assert not is_pushable(scored)
+    assert is_pushable(scored)
