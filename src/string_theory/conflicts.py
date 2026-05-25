@@ -38,6 +38,26 @@ def _overlaps(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> boo
     return a[0] < b[1] and b[0] < a[1]
 
 
+# Threshold for "these two matches are effectively the same slot" in dedup.
+# Below this, a tail/start overlap is tolerated and both matches are kept.
+HEAVY_OVERLAP_RATIO = 0.5
+
+
+def _is_heavy_overlap(a: tuple[datetime, datetime],
+                     b: tuple[datetime, datetime],
+                     ratio: float = HEAVY_OVERLAP_RATIO) -> bool:
+    """True if a and b overlap by at least `ratio` of the SHORTER match's
+    duration. Lets a 90-min match whose tail clips another match's start
+    coexist (small overlap), while still de-duping near-identical slots."""
+    overlap_start = max(a[0], b[0])
+    overlap_end = min(a[1], b[1])
+    if overlap_end <= overlap_start:
+        return False
+    overlap_secs = (overlap_end - overlap_start).total_seconds()
+    shorter_secs = min((a[1] - a[0]).total_seconds(), (b[1] - b[0]).total_seconds())
+    return shorter_secs > 0 and overlap_secs / shorter_secs >= ratio
+
+
 def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
     """Greedy: favorite matches always win on overlap; among non-favorites,
     highest-scored wins. Final tiebreaker is start time.
@@ -57,8 +77,8 @@ def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
     intervals: list[tuple[datetime, datetime]] = []
     for m in by_score:
         iv = match_interval(m)
-        if any(_overlaps(iv, e) for e in intervals):
-            log.debug("dropping %s vs %s — overlaps higher-scored pick",
+        if any(_is_heavy_overlap(iv, e) for e in intervals):
+            log.debug("dropping %s vs %s — heavily overlaps higher-scored pick",
                       m.player_a.short_name, m.player_b.short_name)
             continue
         kept.append(m)

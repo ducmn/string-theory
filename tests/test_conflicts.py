@@ -307,6 +307,39 @@ def test_favorite_always_wins_overlap_even_against_higher_score():
     assert [m.sofa_id for m in kept] == [2]
 
 
+def test_tail_overlap_keeps_both_matches():
+    """A 20-min tail overlap between Iga (11:00–12:30) and Rybakina (12:10–13:40)
+    is below the heavy-overlap threshold — both matches stay."""
+    iga_start = datetime(2026, 5, 25, 10, 0, tzinfo=timezone.utc)  # 11:00 BST in May
+    ryb_start = datetime(2026, 5, 25, 11, 10, tzinfo=timezone.utc)  # 12:10 BST, 70 min later
+    iga = replace(make_match(sofa_id=1, start=iga_start, score=7.0),
+                  tour="wta", round_short="R128",
+                  score_breakdown={"favorite": 0.0, "total": 7.0})
+    ryb = replace(make_match(sofa_id=2, start=ryb_start, score=8.0),
+                  tour="wta", round_short="R128",
+                  score_breakdown={"favorite": 0.0, "total": 8.0})
+    # WTA R128 = 90 min blocks. Iga 10:00–11:30 UTC, Rybakina 11:10–12:40 UTC.
+    # Overlap = 11:10–11:30 = 20 min. Shorter duration = 90 min. Ratio = 22% < 50%.
+    kept = pick_non_overlapping([iga, ryb])
+    assert {m.sofa_id for m in kept} == {1, 2}
+
+
+def test_heavy_overlap_drops_lower_scored():
+    """A 60-min overlap between two 90-min matches crosses the 50% threshold."""
+    a_start = datetime(2026, 5, 25, 10, 0, tzinfo=timezone.utc)
+    b_start = datetime(2026, 5, 25, 10, 30, tzinfo=timezone.utc)  # 30 min later
+    a = replace(make_match(sofa_id=1, start=a_start, score=7.0),
+                tour="wta", round_short="R128",
+                score_breakdown={"favorite": 0.0, "total": 7.0})
+    b = replace(make_match(sofa_id=2, start=b_start, score=8.0),
+                tour="wta", round_short="R128",
+                score_breakdown={"favorite": 0.0, "total": 8.0})
+    # Block a: 10:00–11:30, block b: 10:30–12:00. Overlap = 10:30–11:30 = 60 min.
+    # Ratio = 60/90 = 67% > 50%. Lower-scored (a) gets dropped.
+    kept = pick_non_overlapping([a, b])
+    assert [m.sofa_id for m in kept] == [2]
+
+
 def test_among_non_favorites_higher_score_wins():
     """Two non-favorite overlapping matches: highest score wins."""
     t = datetime(2026, 5, 10, 10, 0, tzinfo=timezone.utc)
