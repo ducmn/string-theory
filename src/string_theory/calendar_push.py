@@ -298,17 +298,19 @@ def prune_orphans(service, calendar_id: str, keep_event_ids: set[str],
 
 def upsert_matches(matches: Iterable[Match], calendar_id: str | None = None,
                    dry_run: bool = False, service=None) -> dict:
-    """Group matches into per-broadcaster daily sessions and upsert each
-    session as a single calendar event.
+    """Upsert each match as its own calendar event with player-named title.
+
+    The build_session_events() helper is kept in this module for the
+    grouped-by-broadcaster mode but isn't called here per user revert.
 
     Returns counters: {created, updated, skipped, errors}.
     """
     counters = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
-    bodies = build_session_events(list(matches))
 
     if dry_run:
-        for body in bodies:
-            log.info("[dry-run] %s  %s", body["start"]["dateTime"], body["summary"])
+        for m in matches:
+            ev = match_to_event(m)
+            log.info("[dry-run] %s  %s  score=%s", ev["start"]["dateTime"], ev["summary"], m.score)
             counters["skipped"] += 1
         return counters
 
@@ -320,7 +322,8 @@ def upsert_matches(matches: Iterable[Match], calendar_id: str | None = None,
         service = build_calendar_service()
     events = service.events()
 
-    for body in bodies:
+    for m in matches:
+        body = match_to_event(m)
         eid = body["id"]
         try:
             events.update(calendarId=calendar_id, eventId=eid, body=body).execute()

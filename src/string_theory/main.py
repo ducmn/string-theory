@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from .calendar_push import (
     build_calendar_service,
-    build_session_events,
+    calendar_event_id,
     prune_orphans,
     upsert_matches,
 )
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.dry_run and not args.no_prune and calendar_id:
         if service is None:
             service = build_calendar_service()
-        keep_ids = {body["id"] for body in build_session_events(deduped)}
+        keep_ids = {calendar_event_id(m) for m in deduped}
         # Prune orphans within the same window we fetched (3 days from today UTC).
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
