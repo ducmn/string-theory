@@ -187,12 +187,17 @@ def test_iga_r128_score_seven_just_clears_threshold():
     assert is_pushable(scored)
 
 
-def test_learner_tien_is_the_sole_named_favorite():
-    """User: 'keep learner as the sole favourite'."""
+def test_favorites_include_tien_and_brits():
+    """Tien is the headline pick; British contingent added 2026-05-25."""
     from string_theory.score import favorite_bonus, FAVORITES
-    assert FAVORITES == {"Learner Tien"}
+    assert "Learner Tien" in FAVORITES
+    for brit in ("Katie Boulter", "Emma Raducanu", "Jack Draper",
+                 "Cameron Norrie", "Dan Evans", "Sonay Kartal"):
+        assert brit in FAVORITES, f"{brit} should be a favorite"
+    # Non-favorites stay non-favorites
     assert favorite_bonus("Iga Swiatek", "Random") == 0.0
     assert favorite_bonus("Alex de Minaur", "Random") == 0.0
+    assert favorite_bonus("Katie Boulter", "Random") == 2.0
     assert favorite_bonus("Learner Tien", "Random") == 2.0
 
 

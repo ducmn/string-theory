@@ -36,12 +36,15 @@ ROUND_WEIGHT = {
 }
 
 FAVORITES = {
-    # Vietnamese-American rising ATP player — sole favorite. Iga and de
-    # Minaur are landed via a lower threshold (7) instead of being named
-    # favorites, per user's calibration: "keep learner as the sole
-    # favourite, just lower the threshold for everyone else so that the
-    # current either iga or de minaur whichever is the higher still lands".
+    # Vietnamese-American rising ATP player — user's headline pick.
     "Learner Tien",
+    # British contingent — user is UK-based and wants the Brits in.
+    "Katie Boulter",
+    "Emma Raducanu",
+    "Jack Draper",
+    "Cameron Norrie",
+    "Dan Evans",
+    "Sonay Kartal",
 }
 
 UNRANKED = 9999

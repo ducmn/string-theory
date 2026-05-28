@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
@@ -126,8 +126,10 @@ def _duration_for(m: Match) -> timedelta:
 
 
 def match_to_event(m: Match) -> dict:
+    """Legacy per-match event format — kept for backwards-compat but no
+    longer used by main.py, which now groups matches into per-broadcaster
+    daily sessions via build_session_events()."""
     if m.event_clip_start_utc and m.event_clip_end_utc:
-        # Busy-filter already determined the displayable window — honour it.
         start = m.event_clip_start_utc.astimezone(LONDON)
         end = _clip_to_bedtime(start, m.event_clip_end_utc.astimezone(LONDON))
     else:
@@ -136,9 +138,6 @@ def match_to_event(m: Match) -> dict:
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),
-        # Location field shows up in Google Calendar's compact agenda view
-        # next to the event time, so the broadcaster is visible at a glance
-        # without expanding the event.
         "location": uk_broadcaster(m.tournament_slug),
         "description": event_description(m),
         "start": {"dateTime": start.isoformat(), "timeZone": "Europe/London"},
@@ -148,6 +147,75 @@ def match_to_event(m: Match) -> dict:
             "url": f"https://www.sofascore.com/event/{m.sofa_id}",
         },
     }
+
+
+# --- Grouped (session) calendar events --------------------------------------
+#
+# User said: "your time is usually off anyway, so how about like roughtly the
+# time of the matches, and ten say just turn on TNT Sports at that time and
+# open the first match i see". So we group all the day's pushable matches by
+# broadcaster, emit ONE event per (date, broadcaster) spanning the session,
+# and put the matches in the description as roughly-timed hints.
+
+def _round_down_to_quarter(dt):
+    return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
+
+
+def _round_up_to_quarter(dt):
+    rd = _round_down_to_quarter(dt)
+    return rd if rd == dt else rd + timedelta(minutes=15)
+
+
+def build_session_events(matches: list[Match]) -> list[dict]:
+    """Group matches by (London date, UK broadcaster) → one calendar event
+    per group. Each event:
+      - title:   "Tennis on <broadcaster>"
+      - location: <broadcaster>
+      - start:   earliest match start, rounded down to nearest 15 min
+      - end:     latest match end, rounded up + bedtime-capped
+      - description: bullet list of matches with their rough times
+    """
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for m in matches:
+        date_key = m.start_utc.astimezone(LONDON).date().isoformat()
+        bc = uk_broadcaster(m.tournament_slug)
+        groups[(date_key, bc)].append(m)
+
+    out: list[dict] = []
+    for (date_key, bc), group in sorted(groups.items()):
+        group.sort(key=lambda x: x.start_utc)
+        first_start_local = group[0].start_utc.astimezone(LONDON)
+        first_start = _round_down_to_quarter(first_start_local)
+        latest_end_local = max(
+            (m.event_clip_end_utc or (m.start_utc + _duration_for(m))).astimezone(LONDON)
+            for m in group
+        )
+        latest_end = _round_up_to_quarter(_clip_to_bedtime(first_start, latest_end_local))
+
+        lines = [f"Open {bc} and watch the first match you see. Today:"]
+        for m in group:
+            t = m.start_utc.astimezone(LONDON).strftime("%H:%M")
+            rank_a = f"#{m.player_a.ranking}" if m.player_a.ranking else "NR"
+            rank_b = f"#{m.player_b.ranking}" if m.player_b.ranking else "NR"
+            lines.append(
+                f"  ~{t}  {m.player_a.short_name} ({rank_a}) vs "
+                f"{m.player_b.short_name} ({rank_b})  — "
+                f"{_tournament_display(m.tournament_slug)} {m.round_short}"
+            )
+
+        eid_seed = f"st-session-{date_key}-{bc.lower().replace(' ', '-')}"
+        event_id = "st" + hashlib.sha1(eid_seed.encode("utf-8")).hexdigest()
+
+        out.append({
+            "id": event_id,
+            "summary": f"Tennis on {bc}",
+            "location": bc,
+            "description": "\n".join(lines),
+            "start": {"dateTime": first_start.isoformat(), "timeZone": "Europe/London"},
+            "end": {"dateTime": latest_end.isoformat(), "timeZone": "Europe/London"},
+        })
+    return out
 
 
 def _build_service(service_account_json: str):
@@ -230,16 +298,17 @@ def prune_orphans(service, calendar_id: str, keep_event_ids: set[str],
 
 def upsert_matches(matches: Iterable[Match], calendar_id: str | None = None,
                    dry_run: bool = False, service=None) -> dict:
-    """Upsert each match into the target Google Calendar.
+    """Group matches into per-broadcaster daily sessions and upsert each
+    session as a single calendar event.
 
     Returns counters: {created, updated, skipped, errors}.
     """
     counters = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
+    bodies = build_session_events(list(matches))
 
     if dry_run:
-        for m in matches:
-            ev = match_to_event(m)
-            log.info("[dry-run] %s  %s  score=%s", ev["start"]["dateTime"], ev["summary"], m.score)
+        for body in bodies:
+            log.info("[dry-run] %s  %s", body["start"]["dateTime"], body["summary"])
             counters["skipped"] += 1
         return counters
 
@@ -251,8 +320,7 @@ def upsert_matches(matches: Iterable[Match], calendar_id: str | None = None,
         service = build_calendar_service()
     events = service.events()
 
-    for m in matches:
-        body = match_to_event(m)
+    for body in bodies:
         eid = body["id"]
         try:
             events.update(calendarId=calendar_id, eventId=eid, body=body).execute()
