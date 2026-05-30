@@ -6,17 +6,32 @@ from __future__ import annotations
 
 
 _RIGHTS_BY_SLUG = {
+    # Tennis
     "wimbledon": "BBC iPlayer",
     "roland-garros": "TNT Sports on HBO Max",
     "australian-open": "TNT Sports on HBO Max",
-    # Sky has held US Open UK rights consistently.
     "us-open": "NowTV",
+    # Football — UK rights as of 2026
+    "uefa-champions-league": "TNT Sports / Amazon Prime",
+    "uefa-europa-league": "TNT Sports",
+    "uefa-conference-league": "TNT Sports",
+    "fifa-world-cup": "BBC iPlayer / ITVX",
+    "uefa-euro": "BBC iPlayer / ITVX",
+    "european-championship": "BBC iPlayer / ITVX",
+    "copa-america": "Premier Sports",
+    "concacaf-champions-cup": "Premier Sports",
+    "fa-cup": "BBC iPlayer / ITVX",
+    "copa-del-rey": "Premier Sports",
+    "coppa-italia": "Premier Sports",
+    "dfb-pokal": "Sky Sports",
 }
 
 
 def uk_broadcaster(tournament_slug: str) -> str:
     """Return the UK broadcaster for a tournament slug.
 
-    Default for ATP/WTA Masters, 500s and 250s is NowTV (Sky Sports).
+    Default fallback is NowTV (Sky Sports) — historically reliable for
+    ATP/WTA Masters, 500s and 250s, and a sensible "if you're not sure,
+    try Sky first" pick for unmapped events.
     """
     return _RIGHTS_BY_SLUG.get(tournament_slug, "NowTV")

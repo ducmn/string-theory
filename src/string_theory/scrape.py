@@ -196,6 +196,96 @@ def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[M
     return out
 
 
+# Football competitions whose knockout matches should auto-land in the
+# calendar. Keys are uniqueTournament.slug from Sofa; values are round-name
+# substrings that qualify. League football (Premier League, La Liga, etc.)
+# is intentionally excluded — too many matches, too much noise.
+FOOTBALL_ALLOWLIST: dict[str, list[str]] = {
+    "uefa-champions-league": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
+    "uefa-europa-league": ["Quarterfinal", "Semifinal", "Final"],
+    "uefa-conference-league": ["Semifinal", "Final"],
+    "fifa-world-cup": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
+    "uefa-euro": ["Quarterfinal", "Semifinal", "Final"],
+    "european-championship": ["Quarterfinal", "Semifinal", "Final"],
+    "copa-america": ["Quarterfinal", "Semifinal", "Final"],
+    "concacaf-champions-cup": ["Final"],
+    "fa-cup": ["Final"],
+    "copa-del-rey": ["Final"],
+    "coppa-italia": ["Final"],
+    "dfb-pokal": ["Final"],
+}
+
+
+def _team_to_football_team(team: dict) -> Player:
+    return Player(
+        sofa_id=team.get("id") or 0,
+        full_name=team.get("name") or "",
+        short_name=team.get("shortName") or team.get("name") or "",
+        country_code=(team.get("country") or {}).get("alpha3") or "",
+        slug=team.get("slug") or "",
+        ranking=None,
+    )
+
+
+def _round_to_short_football(name: str) -> str:
+    return _ROUND_SHORT.get(name, name)
+
+
+def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
+    """Pull knockout-round football matches across the FOOTBALL_ALLOWLIST
+    competitions for the next `days_ahead` days."""
+    today = datetime.now(timezone.utc).date()
+    matches: list[Match] = []
+    seen_ids: set[int] = set()
+    for d in range(days_ahead + 1):
+        date_str = (today + timedelta(days=d)).isoformat()
+        log.info("Fetching football events for %s", date_str)
+        events = _get_json_path(f"/sport/football/scheduled-events/{date_str}").get("events", [])
+        for ev in events:
+            if (ev.get("status") or {}).get("type") not in ("notstarted", "inprogress"):
+                continue
+            ts = ev.get("startTimestamp")
+            if not ts:
+                continue
+            ut = (ev.get("tournament") or {}).get("uniqueTournament") or {}
+            slug = ut.get("slug") or ""
+            if slug not in FOOTBALL_ALLOWLIST:
+                continue
+            round_name = (ev.get("roundInfo") or {}).get("name") or ""
+            if not any(r in round_name for r in FOOTBALL_ALLOWLIST[slug]):
+                continue
+            sofa_id = ev.get("id")
+            if sofa_id in seen_ids:
+                continue
+            seen_ids.add(sofa_id)
+            # Football seasons are often "25/26" or "2025/2026" — pick the
+            # end-year as the canonical season year.
+            season_raw = str(ev.get("season", {}).get("year") or "")
+            try:
+                year = int(season_raw.split("/")[-1]) if season_raw else datetime.utcnow().year
+                if year < 100:
+                    year += 2000
+            except ValueError:
+                year = datetime.utcnow().year
+            matches.append(Match(
+                sofa_id=sofa_id,
+                tour="football",
+                tournament_slug=slug,
+                tournament_name=ut.get("name") or "",
+                tournament_tier="FOOTBALL",
+                surface="",
+                year=year,
+                round_name=round_name,
+                round_short=_round_to_short_football(round_name),
+                start_utc=datetime.fromtimestamp(ts, tz=timezone.utc),
+                player_a=_team_to_football_team(ev["homeTeam"]),
+                player_b=_team_to_football_team(ev["awayTeam"]),
+            ))
+    matches.sort(key=lambda m: m.start_utc)
+    log.info("Loaded %d football matches", len(matches))
+    return matches
+
+
 def fetch_upcoming_matches(days_ahead: int = 2) -> list[Match]:
     """Pull main-tour singles matches scheduled within the next `days_ahead` days."""
     rankings = fetch_rankings()

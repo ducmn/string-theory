@@ -37,7 +37,7 @@ from .conflicts import (
 )
 from .models import Match
 from .score import is_pushable, score_match
-from .scrape import fetch_upcoming_matches
+from .scrape import fetch_upcoming_football_matches, fetch_upcoming_matches
 
 log = logging.getLogger("string_theory")
 
@@ -104,8 +104,11 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s  %(levelname)-7s  %(name)s  %(message)s",
     )
 
-    raw = fetch_upcoming_matches(days_ahead=args.days_ahead)
-    log.info("Fetched %d candidate matches", len(raw))
+    tennis = fetch_upcoming_matches(days_ahead=args.days_ahead)
+    football = fetch_upcoming_football_matches(days_ahead=args.days_ahead)
+    raw = tennis + football
+    log.info("Fetched %d candidate matches (%d tennis + %d football)",
+             len(raw), len(tennis), len(football))
 
     if args.all:
         scored = sorted((score_match(m) for m in raw), key=lambda m: -m.score)

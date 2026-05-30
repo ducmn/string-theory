@@ -79,7 +79,29 @@ def headliner_bonus(rank_a: Optional[int], rank_b: Optional[int]) -> float:
     return 2.0 if best <= 5 else 0.0
 
 
+FOOTBALL_ROUND_WEIGHT = {
+    "Final": 8.0,
+    "Semifinal": 6.0,
+    "Quarterfinal": 4.0,
+    "Round of 16": 2.0,
+}
+
+
 def score_match(m: Match) -> Match:
+    # Football matches are pre-filtered to knockout rounds of big
+    # competitions; they're always interesting and always pushable. Score
+    # them high enough to clear any tennis threshold and sit comfortably
+    # in dedup against tennis matches.
+    if m.tour == "football":
+        tier = 10.0
+        rnd = FOOTBALL_ROUND_WEIGHT.get(m.round_name, 2.0)
+        total = tier + rnd
+        breakdown = {
+            "tier": tier, "round": rnd, "ranking": 0.0,
+            "favorite": 0.0, "headliner": 0.0, "total": total,
+        }
+        return replace(m, score=total, score_breakdown=breakdown)
+
     tier = TIER_WEIGHT.get(m.tournament_tier, 0.0)
     rnd = ROUND_WEIGHT.get(m.round_short, 0.0)
     rank = ranking_score(m.player_a.ranking, m.player_b.ranking)

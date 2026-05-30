@@ -59,7 +59,12 @@ DEFAULT_DURATION_MIN = 180
 
 def duration_minutes(m) -> int:
     """Pick the duration table by tour, fall back to ATP if unknown."""
-    table = DURATION_MINUTES_WTA if getattr(m, "tour", None) == "wta" else DURATION_MINUTES_ATP
+    tour = getattr(m, "tour", None)
+    if tour == "football":
+        # 90 min match + ~20 pre-match + injury time + potentially ET+pens
+        # in knockout rounds — block 2h30m gives the user a fair window.
+        return 150
+    table = DURATION_MINUTES_WTA if tour == "wta" else DURATION_MINUTES_ATP
     return table.get(m.round_short, DEFAULT_DURATION_MIN)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -94,7 +99,8 @@ def _tournament_display(slug: str) -> str:
 def event_title(m: Match) -> str:
     a = m.player_a.short_name or m.player_a.full_name
     b = m.player_b.short_name or m.player_b.full_name
-    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short} ({m.surface})"
+    surface_suffix = f" ({m.surface})" if m.surface else ""
+    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short}{surface_suffix}"
 
 
 def event_description(m: Match) -> str:
