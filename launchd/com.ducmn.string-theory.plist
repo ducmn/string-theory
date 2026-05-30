@@ -16,21 +16,23 @@
         <string>e80874bf53181fb29284b889d65361c598a084b0d8b1e5f9cf3a699ad1be300f@group.calendar.google.com</string>
         <key>GOOGLE_SERVICE_ACCOUNT_JSON</key>
         <string>/Users/ducmn/projects/string-theory/service-account.json</string>
+        <key>BUSY_CALENDAR_IDS</key>
+        <string>nguyenmanhduc1309@gmail.com</string>
+        <key>BUSY_ICS_URLS</key>
+        <string>https://outlook.office365.com/owa/calendar/fa8db5c7e1a047aa8c90cff07e259818@stepstone.com/cd7f0b36024245fa98b8c2d215f2cf932511918829419254462/calendar.ics</string>
         <key>PATH</key>
         <string>/Users/ducmn/Library/Python/3.9/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
     </dict>
 
+    <!-- Every hour on the hour. Tennis schedules shift through the day
+         as preceding matches run long or short, so hourly polling keeps
+         the calendar within ~60 min of the upstream schedule rather
+         than the old 3h drift window. ~30s per run, ~10 min/day total. -->
     <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
-    </array>
+    <dict>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
 
     <key>RunAtLoad</key>
     <false/>
