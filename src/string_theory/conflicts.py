@@ -167,7 +167,13 @@ def fetch_busy_intervals(service, calendar_ids: list[str], time_min: datetime, t
                 for ev in resp.get("items", []):
                     if ev.get("status") == "cancelled":
                         continue
-                    if ev.get("transparency") == "transparent":  # "Free" events
+                    # Skip all-day (date-only) events — vacation/birthday
+                    # markers shouldn't blanket-block evening matches. A TIMED
+                    # event counts as a clash even if it's marked "Free"
+                    # (the user wants matches kept off timed Free events like a
+                    # read-only "fromGmail" reservation that can't be flipped
+                    # to Busy via the API).
+                    if not (ev.get("start") or {}).get("dateTime"):
                         continue
                     # Skip our own pushed events (id = "st"+sha1). Otherwise,
                     # when the target calendar is also a busy source (e.g.

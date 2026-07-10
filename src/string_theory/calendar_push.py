@@ -120,19 +120,19 @@ def event_title(m: Match) -> str:
     b = m.player_b.short_name or m.player_b.full_name
     resume_prefix = "▶ resume: " if getattr(m, "part", 1) > 1 else ""
     court_suffix = f" · {m.court}" if m.court else ""
-    surface_suffix = f" ({m.surface})" if m.surface else ""
     return (f"{resume_prefix}{a} vs {b}, {_tournament_display(m.tournament_slug)} "
-            f"{m.round_short}{court_suffix}{surface_suffix}")
+            f"{m.round_short}{court_suffix}")
 
 
 def event_description(m: Match) -> str:
     rank_a = m.player_a.ranking or "NR"
     rank_b = m.player_b.ranking or "NR"
-    court_bit = f", {m.court}" if m.court else ""
+    # Round / court — omit the tier ("GS") and surface ("grass"); skip blanks.
+    detail = ", ".join(x for x in (m.round_name, m.court) if x)
     return "\n".join([
         f"📊 Live score: https://www.sofascore.com/event/{m.sofa_id}",
         "",
-        f"{m.tournament_name} ({m.tournament_tier}, {m.round_name}, {m.surface}{court_bit})",
+        f"{m.tournament_name} ({detail})",
         f"{m.player_a.full_name} (#{rank_a}, {m.player_a.country_code}) "
         f"vs {m.player_b.full_name} (#{rank_b}, {m.player_b.country_code})",
     ])
