@@ -39,7 +39,7 @@ from .conflicts import (
 from .models import Match
 from .score import is_pushable, score_match
 from .scrape import (
-    fetch_event_court,
+    fetch_event_venue,
     fetch_upcoming_football_matches,
     fetch_upcoming_matches,
 )
@@ -75,10 +75,10 @@ def is_in_office_hours(m: Match) -> bool:
 
 
 def _with_court(m: Match) -> Match:
-    """Attach the court/venue name (best-effort) to a match for display."""
+    """Attach the venue + city (best-effort) to a match for display."""
     from dataclasses import replace
-    court = fetch_event_court(m.sofa_id)
-    return replace(m, court=court) if court else m
+    venue = fetch_event_venue(m.sofa_id)
+    return replace(m, court=venue) if venue else m
 
 
 def select_matches(matches: Iterable[Match]) -> list[Match]:

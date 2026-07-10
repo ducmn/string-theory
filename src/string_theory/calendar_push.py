@@ -148,6 +148,19 @@ def _duration_for(m: Match) -> timedelta:
     return timedelta(minutes=duration_minutes(m))
 
 
+# Google Calendar event colour IDs. Scheme: must-watch favorites pop in red;
+# the two sports get their own colours so the calendar reads at a glance.
+COLOR_FAVORITE = "11"   # Tomato  — a favorite player or England (must-watch)
+COLOR_TENNIS = "10"     # Basil   — other tennis
+COLOR_FOOTBALL = "9"    # Blueberry — other football
+
+
+def _event_color(m: Match) -> str:
+    if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
+        return COLOR_FAVORITE
+    return COLOR_FOOTBALL if m.tour == "football" else COLOR_TENNIS
+
+
 def match_to_event(m: Match) -> dict:
     """Legacy per-match event format — kept for backwards-compat but no
     longer used by main.py, which now groups matches into per-broadcaster
@@ -163,6 +176,7 @@ def match_to_event(m: Match) -> dict:
         "summary": event_title(m),
         "location": uk_broadcaster(m.tournament_slug),
         "description": event_description(m),
+        "colorId": _event_color(m),
         "start": {"dateTime": start.isoformat(), "timeZone": "Europe/London"},
         "end": {"dateTime": end.isoformat(), "timeZone": "Europe/London"},
         "source": {

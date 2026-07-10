@@ -168,19 +168,22 @@ def _strip_gender(name: str) -> str:
     return name
 
 
-def fetch_event_court(sofa_id: int) -> str | None:
-    """Best-effort court/venue name for a single event (e.g. "Centre Court").
+def fetch_event_venue(sofa_id: int) -> str | None:
+    """Best-effort venue + city for a single event, e.g. "Centre Court, London"
+    or "Hard Rock Stadium, Miami Gardens" (no country).
 
     Only the per-event detail endpoint carries `venue`; the scheduled-events
     list does not. Called just for the handful of finally-selected matches so
     we don't hit this endpoint for every candidate. Returns None on any
-    failure — court is a nice-to-have, never fatal."""
+    failure — venue is a nice-to-have, never fatal."""
     try:
         data = _get_json_path(f"/event/{sofa_id}")
     except RuntimeError:
         return None
     venue = ((data.get("event") or {}).get("venue")) or {}
-    return venue.get("name") or None
+    name = venue.get("name")
+    city = (venue.get("city") or {}).get("name")
+    return ", ".join(p for p in (name, city) if p) or None
 
 
 def _normalize_surface(s: str) -> str:
