@@ -103,6 +103,10 @@ def legible_event_key(m: Match) -> str:
 
 def calendar_event_id(m: Match) -> str:
     key = legible_event_key(m)
+    # A split match's later ("resume") blocks need distinct, stable IDs. part=1
+    # keeps the base key so existing single-block events update in place.
+    if getattr(m, "part", 1) > 1:
+        key = f"{key}-part{m.part}"
     h = hashlib.sha1(key.encode("utf-8")).hexdigest()
     return f"st{h}"
 
@@ -114,9 +118,11 @@ def _tournament_display(slug: str) -> str:
 def event_title(m: Match) -> str:
     a = m.player_a.short_name or m.player_a.full_name
     b = m.player_b.short_name or m.player_b.full_name
+    resume_prefix = "▶ resume: " if getattr(m, "part", 1) > 1 else ""
     court_suffix = f" · {m.court}" if m.court else ""
     surface_suffix = f" ({m.surface})" if m.surface else ""
-    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short}{court_suffix}{surface_suffix}"
+    return (f"{resume_prefix}{a} vs {b}, {_tournament_display(m.tournament_slug)} "
+            f"{m.round_short}{court_suffix}{surface_suffix}")
 
 
 def event_description(m: Match) -> str:

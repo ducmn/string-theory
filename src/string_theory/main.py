@@ -32,8 +32,8 @@ from .conflicts import (
     busy_ics_urls,
     fetch_busy_intervals,
     fetch_ics_busy_intervals,
-    filter_no_overlap,
     pick_non_overlapping,
+    split_matches_around_busy,
     stack_sequential_matches,
 )
 from .models import Match
@@ -137,11 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     calendar_id = args.calendar_id or os.environ.get("TARGET_CALENDAR_ID")
     service = None
 
-    # Conflict check: drop a match if it overlaps ANY existing event on the
-    # personal (Google) or work (ICS) calendar, even partially — the user
-    # doesn't want tennis written over something already booked. Run BEFORE
-    # de-overlap so a clashing match is gone before slot selection. (Our own
-    # pushed events are excluded from the busy set, so no self-conflict.)
+    # Pull the user's existing commitments (personal Google + work ICS) so we
+    # can cut matches short / split them around real events. Our own pushed
+    # events are excluded from the busy set, so no self-conflict.
     busy_ids = busy_calendar_ids()
     ics_urls = busy_ics_urls()
     busy: list = []
@@ -153,30 +151,27 @@ def main(argv: list[str] | None = None) -> int:
             busy.extend(fetch_busy_intervals(service, busy_ids, time_min, time_max))
         if ics_urls:
             busy.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
-        before = len(pushable)
-        pushable = filter_no_overlap(pushable, busy)
-        log.info("After overlap filter: %d (dropped %d)", len(pushable), before - len(pushable))
     elif (busy_ids or ics_urls) and args.dry_run:
-        log.info("[dry-run] would drop matches overlapping any event on %d google + %d ICS feeds",
+        log.info("[dry-run] would cut/split matches around events on %d google + %d ICS feeds",
                  len(busy_ids), len(ics_urls))
 
+    # De-overlap competing matches (favorites first, then tennis over football,
+    # then score).
     deduped = pick_non_overlapping(pushable)
     # Back-to-back matches at the same tournament (e.g. two Wimbledon semis on
     # Centre Court) are sequential — stack them so each keeps a full block and
     # later ones start when the previous finishes (no overlap).
     deduped = stack_sequential_matches(deduped)
-    # Stacking can push a (non-favorite) match into an existing event's slot
-    # that its nominal time didn't hit — re-run the overlap drop on the SHIFTED
-    # windows so a stacked match never eats into something already booked.
+    # Against the user's real calendar: don't drop a clashing match — cut it
+    # short, and if the clash is mid-match, split it so they can resume after.
+    # Favorites are exempt (they run over the top of anything). Uses the final
+    # stacked positions.
     if busy:
-        before = len(deduped)
-        deduped = filter_no_overlap(deduped, busy)
-        if before != len(deduped):
-            log.info("After post-stack overlap filter: %d (dropped %d)", len(deduped), before - len(deduped))
+        deduped = split_matches_around_busy(deduped, busy)
     # Enrich the final selection with court/venue (per-event call — cheap for
     # this handful). Best-effort; matches without a court are left as-is.
     deduped = [_with_court(m) for m in deduped]
-    log.info("After internal de-overlap: %d", len(deduped))
+    log.info("Final events after cut/split: %d", len(deduped))
 
     # Safety: only skip prune when Sofa itself returned nothing (likely
     # outage) — NOT when our filters legitimately dropped everything. If

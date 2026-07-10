@@ -221,6 +221,58 @@ def test_stack_sequential_same_tournament_matches():
     assert out[2].event_clip_end_utc == m1_end + timedelta(minutes=165)
 
 
+def test_split_creates_resume_block_on_mid_conflict():
+    """A busy event in the middle of a match splits it into two blocks: the
+    part before (part 1) and a resume block after (part 2)."""
+    from string_theory.conflicts import split_matches_around_busy
+    start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
+    m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")  # 180 min
+    busy = [(datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc),
+             datetime(2026, 5, 9, 15, 30, tzinfo=timezone.utc))]
+    out = split_matches_around_busy([m], busy)
+    assert len(out) == 2
+    assert out[0].part == 1
+    assert out[0].event_clip_start_utc == start
+    assert out[0].event_clip_end_utc == datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc)
+    assert out[1].part == 2
+    assert out[1].event_clip_start_utc == datetime(2026, 5, 9, 15, 30, tzinfo=timezone.utc)
+    assert out[1].event_clip_end_utc == datetime(2026, 5, 9, 17, 0, tzinfo=timezone.utc)
+
+
+def test_split_exempts_favorites():
+    """A favorite match is never cut or split — runs its full block."""
+    from string_theory.conflicts import split_matches_around_busy
+    start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
+    m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")
+    m = replace(m, score_breakdown={"favorite": 2.0})
+    busy = [(datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc),
+             datetime(2026, 5, 9, 15, 30, tzinfo=timezone.utc))]
+    out = split_matches_around_busy([m], busy)
+    assert len(out) == 1
+    assert out[0].event_clip_start_utc is None  # untouched
+
+
+def test_pick_non_overlapping_prefers_tennis_over_football():
+    """When a tennis and a football match heavily overlap, tennis wins even
+    though football scores higher."""
+    from string_theory.conflicts import pick_non_overlapping
+    start = datetime(2026, 5, 9, 18, 0, tzinfo=timezone.utc)
+    tennis = replace(make_match(sofa_id=1, start=start, round_short="SF"), tour="atp", score=9.0)
+    football = Match(
+        sofa_id=2, tour="football", tournament_slug="world-championship",
+        tournament_name="FIFA World Cup", tournament_tier="FOOTBALL",
+        surface="", year=2026, round_name="Quarterfinals", round_short="Quarterfinals",
+        start_utc=start, score=12.0,
+        player_a=Player(sofa_id=1, full_name="Spain", short_name="Spain",
+                        country_code="", slug="spain", ranking=None),
+        player_b=Player(sofa_id=2, full_name="Belgium", short_name="Belgium",
+                        country_code="", slug="belgium", ranking=None),
+    )
+    kept = pick_non_overlapping([football, tennis])
+    assert len(kept) == 1
+    assert kept[0].sofa_id == 1  # the tennis match
+
+
 def test_filter_no_overlap_drops_on_any_overlap():
     """filter_no_overlap drops a match that overlaps a busy interval even
     partially — stricter than filter_fully_subsumed."""

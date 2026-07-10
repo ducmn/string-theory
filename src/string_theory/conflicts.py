@@ -77,7 +77,11 @@ def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
     """
     def sort_key(m: Match) -> tuple:
         fav_present = (m.score_breakdown or {}).get("favorite", 0.0) > 0
-        return (0 if fav_present else 1, -m.score, m.start_utc)
+        # Priority: favorites first, then tennis over football (the user
+        # prefers tennis when the two clash, even though football scores
+        # higher), then by score, then earliest start.
+        is_football = m.tour == "football"
+        return (0 if fav_present else 1, 1 if is_football else 0, -m.score, m.start_utc)
 
     by_score = sorted(matches, key=sort_key)
     kept: list[Match] = []
@@ -264,10 +268,11 @@ def _local_window_to_utc(reference_utc: datetime,
 MIN_FREE_MINUTES = 60  # below this remaining-free time, skip the match entirely
 
 
-def _largest_free_segment(window: tuple[datetime, datetime],
-                          busy: list[tuple[datetime, datetime]]
-                          ) -> tuple[datetime, datetime] | None:
-    """Subtract busy intervals from `window`, return the largest free chunk."""
+def _free_segments(window: tuple[datetime, datetime],
+                   busy: list[tuple[datetime, datetime]]
+                   ) -> list[tuple[datetime, datetime]]:
+    """Subtract busy intervals from `window`; return all free chunks, in time
+    order. A busy interval in the middle yields two chunks (before / after)."""
     free: list[tuple[datetime, datetime]] = [window]
     for bs, be in busy:
         new_free: list[tuple[datetime, datetime]] = []
@@ -280,7 +285,54 @@ def _largest_free_segment(window: tuple[datetime, datetime],
             if be < fe:
                 new_free.append((be, fe))
         free = new_free
+    return sorted(free, key=lambda x: x[0])
+
+
+def _largest_free_segment(window: tuple[datetime, datetime],
+                          busy: list[tuple[datetime, datetime]]
+                          ) -> tuple[datetime, datetime] | None:
+    """Subtract busy intervals from `window`, return the largest free chunk."""
+    free = _free_segments(window, busy)
     return max(free, key=lambda x: x[1] - x[0]) if free else None
+
+
+def split_matches_around_busy(matches: list[Match],
+                              busy: list[tuple[datetime, datetime]],
+                              min_free_minutes: int = MIN_FREE_MINUTES) -> list[Match]:
+    """Instead of dropping a match that overlaps an existing event, CUT IT
+    SHORT — and if the conflict is in the middle, split it so the user can
+    RESUME after. Each qualifying free segment (>= min_free_minutes) becomes
+    its own event (part=1, part=2 "resume", ...). A segment shorter than the
+    floor is discarded; if nothing qualifies the match drops out entirely.
+
+    Favorites (a favorite player, or England) are must-watch and are never
+    cut or split — they run their full block over the top of anything."""
+    from dataclasses import replace as _replace
+
+    if not busy:
+        return list(matches)
+    out: list[Match] = []
+    for m in matches:
+        if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
+            out.append(m)
+            continue
+        iv = match_interval(m)
+        segs = [s for s in _free_segments(iv, busy)
+                if (s[1] - s[0]).total_seconds() / 60 >= min_free_minutes]
+        if not segs:
+            log.info("skip (busy conflict): %s vs %s @ %s",
+                     m.player_a.short_name, m.player_b.short_name, m.start_utc.isoformat())
+            continue
+        if len(segs) == 1 and segs[0] == iv:
+            out.append(m)  # no conflict — full block
+            continue
+        for idx, (s, e) in enumerate(segs, start=1):
+            tag = "resume" if idx > 1 else "cut short"
+            log.info("%s (busy): %s vs %s — part %d %s–%s",
+                     tag, m.player_a.short_name, m.player_b.short_name, idx,
+                     s.astimezone(LONDON).strftime("%H:%M"), e.astimezone(LONDON).strftime("%H:%M"))
+            out.append(_replace(m, event_clip_start_utc=s, event_clip_end_utc=e, part=idx))
+    return out
 
 
 def filter_no_overlap(matches: list[Match],
@@ -356,6 +408,11 @@ def filter_against_busy(matches: list[Match],
         return list(matches)
     out: list[Match] = []
     for m in matches:
+        # Favorites (a favorite player, or England) are must-watch: never
+        # clipped or dropped for a conflict — they run their full block.
+        if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
+            out.append(m)
+            continue
         iv = match_interval(m)
         free = _largest_free_segment(iv, busy)
         if free is None or (free[1] - free[0]).total_seconds() / 60 < min_free_minutes:
@@ -363,7 +420,7 @@ def filter_against_busy(matches: list[Match],
                      m.player_a.short_name, m.player_b.short_name, m.start_utc.isoformat())
             continue
         if free != iv:
-            log.info("clip (busy partial): %s vs %s — pushing %s–%s instead of full block",
+            log.info("clip (busy partial): %s vs %s — cutting short to %s–%s instead of full block",
                      m.player_a.short_name, m.player_b.short_name,
                      free[0].astimezone(LONDON).strftime("%H:%M"),
                      free[1].astimezone(LONDON).strftime("%H:%M"))
