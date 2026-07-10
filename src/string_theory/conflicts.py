@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 
 
 def match_interval(m: Match) -> tuple[datetime, datetime]:
+    # If the event was shifted/clipped (e.g. stacked after an earlier match on
+    # the same court), use that actual window — overlap and dedup math must see
+    # where the block really lands, not its nominal start.
+    if m.event_clip_start_utc and m.event_clip_end_utc:
+        return m.event_clip_start_utc, m.event_clip_end_utc
     start = m.start_utc
     start_local = start.astimezone(LONDON)
     raw_end_local = start_local + timedelta(minutes=duration_minutes(m))

@@ -144,10 +144,10 @@ def main(argv: list[str] | None = None) -> int:
     # pushed events are excluded from the busy set, so no self-conflict.)
     busy_ids = busy_calendar_ids()
     ics_urls = busy_ics_urls()
+    busy: list = []
     if (busy_ids or ics_urls) and not args.dry_run and pushable:
         time_min = min(m.start_utc for m in pushable) - timedelta(minutes=30)
         time_max = max(m.start_utc for m in pushable) + timedelta(hours=6)
-        busy: list = []
         if busy_ids:
             service = build_calendar_service()
             busy.extend(fetch_busy_intervals(service, busy_ids, time_min, time_max))
@@ -165,6 +165,14 @@ def main(argv: list[str] | None = None) -> int:
     # Centre Court) are sequential — stack them so each keeps a full block and
     # later ones start when the previous finishes (no overlap).
     deduped = stack_sequential_matches(deduped)
+    # Stacking can push a (non-favorite) match into an existing event's slot
+    # that its nominal time didn't hit — re-run the overlap drop on the SHIFTED
+    # windows so a stacked match never eats into something already booked.
+    if busy:
+        before = len(deduped)
+        deduped = filter_no_overlap(deduped, busy)
+        if before != len(deduped):
+            log.info("After post-stack overlap filter: %d (dropped %d)", len(deduped), before - len(deduped))
     # Enrich the final selection with court/venue (per-event call — cheap for
     # this handful). Best-effort; matches without a court are left as-is.
     deduped = [_with_court(m) for m in deduped]
