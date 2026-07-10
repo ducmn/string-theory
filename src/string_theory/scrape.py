@@ -294,6 +294,19 @@ FOOTBALL_ALLOWLIST: dict[str, list[str]] = {
     "dfb-pokal": ["Final"],
 }
 
+# Competitions contested by national teams (as opposed to clubs). For these,
+# the user only cares about matches involving one of FOOTBALL_NATIONS below —
+# club competitions are unaffected since they have no national side playing.
+FOOTBALL_NATIONAL_TEAM_SLUGS = {
+    "world-championship",
+    "european-championship",
+    "copa-america",
+}
+
+# National sides the user follows. A national-team match is only kept if one of
+# the two teams is in this set (matched on the Sofascore team name).
+FOOTBALL_NATIONS = {"England", "France"}
+
 
 def _team_to_football_team(team: dict) -> Player:
     return Player(
@@ -340,6 +353,15 @@ def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
             round_name = (ev.get("roundInfo") or {}).get("name") or ""
             if not any(r in round_name for r in FOOTBALL_ALLOWLIST[slug]):
                 continue
+            # National-team comps (World Cup, Euros, Copa) are restricted to the
+            # nations the user follows; club comps pass through untouched.
+            if slug in FOOTBALL_NATIONAL_TEAM_SLUGS:
+                names = {
+                    (ev.get("homeTeam") or {}).get("name"),
+                    (ev.get("awayTeam") or {}).get("name"),
+                }
+                if not (names & FOOTBALL_NATIONS):
+                    continue
             sofa_id = ev.get("id")
             if sofa_id in seen_ids:
                 continue
