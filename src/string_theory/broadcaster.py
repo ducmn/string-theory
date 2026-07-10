@@ -35,3 +35,27 @@ def uk_broadcaster(tournament_slug: str) -> str:
     try Sky first" pick for unmapped events.
     """
     return _RIGHTS_BY_SLUG.get(tournament_slug, "NowTV")
+
+
+# The World Cup / Euros are split match-by-match across BBC and ITV, so the
+# per-tournament default ("BBC iPlayer / ITVX") can't say which one. Sofascore
+# carries no TV data, so this is a MANUAL map from published listings, keyed by
+# the unordered pair of team names. Best-effort: extend/replace as the bracket
+# resolves; unlisted fixtures fall back to "BBC iPlayer / ITVX".
+_SPLIT_TOURNAMENTS = {"world-championship", "european-championship"}
+_FOOTBALL_MATCH_BROADCASTER = {
+    frozenset({"Spain", "Belgium"}): "BBC iPlayer",   # QF, Fri 10 Jul 2026
+    frozenset({"Norway", "England"}): "ITVX",         # QF, Sat 11 Jul 2026
+}
+
+
+def uk_broadcaster_for_match(m) -> str:
+    """UK broadcaster for a specific match. For BBC/ITV-split tournaments,
+    prefer a known per-fixture assignment; otherwise fall back to the
+    per-tournament default."""
+    if m.tournament_slug in _SPLIT_TOURNAMENTS:
+        override = _FOOTBALL_MATCH_BROADCASTER.get(
+            frozenset({m.player_a.full_name, m.player_b.full_name}))
+        if override:
+            return override
+    return uk_broadcaster(m.tournament_slug)

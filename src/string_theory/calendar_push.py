@@ -19,7 +19,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .broadcaster import uk_broadcaster
+from .broadcaster import uk_broadcaster, uk_broadcaster_for_match
 from .models import Match
 
 log = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ def match_to_event(m: Match) -> dict:
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),
-        "location": uk_broadcaster(m.tournament_slug),
+        "location": uk_broadcaster_for_match(m),
         "description": event_description(m),
         "colorId": _event_color(m),
         "start": {"dateTime": start.isoformat(), "timeZone": "Europe/London"},
