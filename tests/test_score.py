@@ -69,11 +69,12 @@ def test_ranking_score(a, b, expected):
 
 # ---- favorite_bonus --------------------------------------------------------
 
-def test_favorite_bonus_only_learner_tien():
-    """Learner Tien is the sole favorite — no one else gets the bonus."""
+def test_favorite_bonus_named_players_only():
+    """A named favorite gets the bonus; unlisted players don't."""
     assert favorite_bonus("Learner Tien", "Random Guy") == 2.0
     assert favorite_bonus("Random Guy", "Learner Tien") == 2.0
-    assert favorite_bonus("Jannik Sinner", "Carlos Alcaraz") == 0.0
+    assert favorite_bonus("Jannik Sinner", "Random Guy") == 2.0  # Sinner is a favorite
+    assert favorite_bonus("Carlos Alcaraz", "Daniil Medvedev") == 0.0  # neither is
     assert favorite_bonus("Random A", "Random B") == 0.0
 
 
@@ -94,10 +95,10 @@ def test_grand_slam_final_top_players_scores_high():
     m = make_match(
         tier="GS", round_short="F",
         rank_a=1, rank_b=2,
-        name_a="Jannik Sinner", name_b="Carlos Alcaraz",
+        name_a="Carlos Alcaraz", name_b="Daniil Medvedev",  # top players, not favorites
     )
     scored = score_match(m)
-    # tier 5 + round 5 + ranking 5 + favorite 0 (not favorites anymore) +
+    # tier 5 + round 5 + ranking 5 + favorite 0 (neither is a favorite) +
     # headliner 2 (both top-5) = 17
     assert scored.score == 17.0
     assert scored.score_breakdown == {
@@ -193,7 +194,7 @@ def test_favorites_are_user_named_picks():
     dropped 2026-07-10 — the user said they only care about Emma and Fery."""
     from string_theory.score import favorite_bonus, FAVORITES
     for name in ("Learner Tien", "Grigor Dimitrov", "Madison Keys",
-                 "Alexandra Eala", "Emma Raducanu", "Arthur Fery"):
+                 "Alexandra Eala", "Jannik Sinner", "Emma Raducanu", "Arthur Fery"):
         assert name in FAVORITES, f"{name} should be a favorite"
     # Dropped Brits are no longer favorites
     for dropped in ("Katie Boulter", "Jack Draper", "Cameron Norrie",

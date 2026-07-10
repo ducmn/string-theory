@@ -42,6 +42,7 @@ FAVORITES = {
     "Grigor Dimitrov",
     "Madison Keys",
     "Alexandra Eala",
+    "Jannik Sinner",
     # The Brits the user actually cares about.
     "Emma Raducanu",
     "Arthur Fery",
