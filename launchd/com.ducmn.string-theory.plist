@@ -12,10 +12,23 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Push to the user's primary (Personal) calendar. The original
+             design used a dedicated Tennis calendar shared to a service
+             account, but no service-account.json ever existed; we now auth
+             as the user via reused OAuth creds (GOOGLE_OAUTH_* below), whose
+             calendar.events scope can write to owned calendars but can't
+             create new ones. To switch to a dedicated calendar: create one
+             in Google Calendar and paste its ID here. -->
         <key>TARGET_CALENDAR_ID</key>
-        <string>e80874bf53181fb29284b889d65361c598a084b0d8b1e5f9cf3a699ad1be300f@group.calendar.google.com</string>
-        <key>GOOGLE_SERVICE_ACCOUNT_JSON</key>
-        <string>/Users/ducmn/projects/string-theory/service-account.json</string>
+        <string>primary</string>
+        <!-- Reuse the foodcycle-slot-scout OAuth desktop-app client + token
+             (same Google account, scope calendar.events, has a refresh
+             token). calendar_push.build_calendar_service() falls back to
+             these when no service account is configured. -->
+        <key>GOOGLE_OAUTH_CLIENT_JSON</key>
+        <string>/Users/ducmn/projects/foodcycle-slot-scout/credentials.json</string>
+        <key>GOOGLE_OAUTH_TOKEN_JSON</key>
+        <string>/Users/ducmn/projects/foodcycle-slot-scout/token.json</string>
         <key>BUSY_CALENDAR_IDS</key>
         <string>nguyenmanhduc1309@gmail.com</string>
         <key>BUSY_ICS_URLS</key>

@@ -200,6 +200,49 @@ def test_fully_subsumed_drops_only_when_no_free_gap():
     assert len(filter_fully_subsumed([m], [])) == 1
 
 
+def test_stack_sequential_same_tournament_matches():
+    """Two same-tournament matches back-to-back: the first keeps its full block;
+    the second is pushed to start when the first ends (no overlap, full time)."""
+    from string_theory.conflicts import stack_sequential_matches
+
+    # Same slug ("rome") = same tournament. ATP SF block is 165 min.
+    s1 = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
+    s2 = datetime(2026, 5, 9, 13, 40, tzinfo=timezone.utc)  # before m1's block ends
+    m1 = replace(make_match(sofa_id=1, start=s1, round_short="SF"), tour="atp")
+    m2 = replace(make_match(sofa_id=2, start=s2, round_short="SF"), tour="atp")
+
+    out = {m.sofa_id: m for m in stack_sequential_matches([m1, m2])}
+    m1_end = datetime(2026, 5, 9, 14, 45, tzinfo=timezone.utc)   # s1 + 165 min
+    # m1 keeps its natural block (first in the group) — no clip applied
+    assert out[1].event_clip_start_utc is None
+    assert out[1].event_clip_end_utc is None
+    # m2 is pushed to start at m1's end and keeps a full 165-min block
+    assert out[2].event_clip_start_utc == m1_end
+    assert out[2].event_clip_end_utc == m1_end + timedelta(minutes=165)
+
+
+def test_filter_no_overlap_drops_on_any_overlap():
+    """filter_no_overlap drops a match that overlaps a busy interval even
+    partially — stricter than filter_fully_subsumed."""
+    from string_theory.conflicts import filter_no_overlap
+    match_start = datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc)
+    m = make_match(sofa_id=1, start=match_start, round_short="R32")
+    m = replace(m, tour="atp")  # 14:00–16:00 UTC block
+
+    # A 15-min clash near the end still drops the whole match.
+    tail_clash = [(datetime(2026, 5, 11, 15, 45, tzinfo=timezone.utc),
+                   datetime(2026, 5, 11, 16, 0, tzinfo=timezone.utc))]
+    assert filter_no_overlap([m], tail_clash) == []
+
+    # A non-overlapping busy interval keeps it.
+    elsewhere = [(datetime(2026, 5, 11, 16, 0, tzinfo=timezone.utc),
+                  datetime(2026, 5, 11, 17, 0, tzinfo=timezone.utc))]
+    assert len(filter_no_overlap([m], elsewhere)) == 1
+
+    # No busy → kept.
+    assert len(filter_no_overlap([m], [])) == 1
+
+
 def test_partial_busy_clips_match_instead_of_dropping():
     """A 30-min meeting at the start of a 3h match should clip, not drop, the event."""
     from string_theory.conflicts import filter_against_busy
@@ -215,9 +258,9 @@ def test_partial_busy_clips_match_instead_of_dropping():
     out = filter_against_busy([m], busy)
     assert len(out) == 1
     kept = out[0]
-    # Should have a clip start at 14:30, end at 17:00
+    # Should have a clip start at 14:30, end at 16:00
     assert kept.event_clip_start_utc == datetime(2026, 5, 11, 14, 30, tzinfo=timezone.utc)
-    assert kept.event_clip_end_utc == datetime(2026, 5, 11, 17, 0, tzinfo=timezone.utc)
+    assert kept.event_clip_end_utc == datetime(2026, 5, 11, 16, 0, tzinfo=timezone.utc)
 
 
 def test_busy_filter_drops_when_free_segment_too_short():
@@ -225,11 +268,11 @@ def test_busy_filter_drops_when_free_segment_too_short():
     from string_theory.conflicts import filter_against_busy
     match_start = datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc)
     m = make_match(sofa_id=1, start=match_start, round_short="R32")
-    m = replace(m, tour="atp")  # 180 min block 14:00–17:00 UTC
+    m = replace(m, tour="atp")  # 120 min block 14:00–16:00 UTC
 
-    # Busy 14:00–16:30 UTC — leaves only 16:30–17:00 free (30 min)
+    # Busy 14:00–15:30 UTC — leaves only 15:30–16:00 free (30 min)
     busy = [(datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc),
-             datetime(2026, 5, 11, 16, 30, tzinfo=timezone.utc))]
+             datetime(2026, 5, 11, 15, 30, tzinfo=timezone.utc))]
     out = filter_against_busy([m], busy)
     assert out == []
 
@@ -264,7 +307,7 @@ def test_office_hours_blackout_tue_thu():
 
 
 def test_wta_match_uses_shorter_duration_than_atp():
-    """WTA matches (best-of-3) get a 2.5h R32 block; ATP gets 3h."""
+    """WTA matches (best-of-3) get a shorter R32 block than ATP."""
     from string_theory.conflicts import match_interval
 
     start = datetime(2026, 5, 9, 10, 0, tzinfo=timezone.utc)
@@ -275,23 +318,50 @@ def test_wta_match_uses_shorter_duration_than_atp():
 
     _, wta_end = match_interval(wta)
     _, atp_end = match_interval(atp)
-    assert (wta_end - start).total_seconds() == 150 * 60  # 2.5h
-    assert (atp_end - start).total_seconds() == 180 * 60  # 3h
+    assert (wta_end - start).total_seconds() == 105 * 60  # 1h45
+    assert (atp_end - start).total_seconds() == 120 * 60  # 2h
 
 
 def test_match_interval_clips_at_bedtime():
-    """A match starting at 21:30 BST has its event-block end clipped at 22:30 BST,
-    not the natural 00:30 BST that 3h would imply."""
+    """A non-favorite match starting at 21:30 BST has its event-block end
+    clipped at 23:00 BST, not the natural end that its duration would imply."""
     from zoneinfo import ZoneInfo
     from string_theory.conflicts import match_interval
 
     LONDON = ZoneInfo("Europe/London")
     # 21:30 London (BST in May = UTC+1) = 20:30 UTC
     start = datetime(2026, 5, 9, 20, 30, tzinfo=timezone.utc)
-    m = make_match(sofa_id=99, start=start, round_short="R32")  # 180 min default
+    m = make_match(sofa_id=99, start=start, round_short="SF")  # 165 min -> 00:15, clipped
     s, e = match_interval(m)
     end_local = e.astimezone(LONDON)
-    assert end_local.hour == 22 and end_local.minute == 30
+    assert end_local.hour == 23 and end_local.minute == 0
+
+
+def test_favorite_match_runs_past_bedtime():
+    """A favorite (England / a favorite player) is NOT clipped at bedtime — the
+    block runs to its natural end so the user can watch to the finish."""
+    from zoneinfo import ZoneInfo
+    from string_theory.conflicts import match_interval
+    from string_theory.score import score_match
+
+    LONDON = ZoneInfo("Europe/London")
+    # England World Cup QF starting 22:00 London (BST) = 21:00 UTC; 150 min
+    # football block => 00:30 London, which must NOT be clipped to 23:00.
+    start = datetime(2026, 7, 11, 21, 0, tzinfo=timezone.utc)
+    m = Match(
+        sofa_id=7, tour="football", tournament_slug="world-championship",
+        tournament_name="FIFA World Cup", tournament_tier="FOOTBALL",
+        surface="", year=2026, round_name="Quarterfinals", round_short="Quarterfinals",
+        start_utc=start,
+        player_a=Player(sofa_id=1, full_name="Norway", short_name="Norway",
+                        country_code="", slug="norway", ranking=None),
+        player_b=Player(sofa_id=2, full_name="England", short_name="England",
+                        country_code="", slug="england", ranking=None),
+    )
+    m = score_match(m)  # sets favorite bonus
+    _, e = match_interval(m)
+    end_local = e.astimezone(LONDON)
+    assert (end_local.hour, end_local.minute) == (0, 30)  # full block, past bedtime
 
 
 def test_favorite_always_wins_overlap_even_against_higher_score():

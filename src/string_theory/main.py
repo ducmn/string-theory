@@ -32,18 +32,23 @@ from .conflicts import (
     busy_ics_urls,
     fetch_busy_intervals,
     fetch_ics_busy_intervals,
-    filter_fully_subsumed,
+    filter_no_overlap,
     pick_non_overlapping,
+    stack_sequential_matches,
 )
 from .models import Match
 from .score import is_pushable, score_match
-from .scrape import fetch_upcoming_football_matches, fetch_upcoming_matches
+from .scrape import (
+    fetch_event_court,
+    fetch_upcoming_football_matches,
+    fetch_upcoming_matches,
+)
 
 log = logging.getLogger("string_theory")
 
 LONDON = ZoneInfo("Europe/London")
 WATCH_WINDOW_START = dtime(7, 0)    # inclusive, London local
-WATCH_WINDOW_END = dtime(22, 30)    # exclusive — past this, the user's asleep
+WATCH_WINDOW_END = dtime(23, 0)     # exclusive — a match starting past 11pm is too late
 
 # User is in the office on these weekdays (Monday=0); daytime tennis is
 # blacked out regardless of score or specific calendar conflicts.
@@ -53,9 +58,8 @@ OFFICE_HOURS_END = dtime(18, 0)
 
 
 def is_in_watch_window(m: Match) -> bool:
-    """True if the match's *start* is between 07:00 (incl.) and 22:30 (excl.)
-    Europe/London. Past 22:30 we don't bother — even a short block would push
-    into bedtime."""
+    """True if the match's *start* is between 07:00 (incl.) and 23:00 (excl.)
+    Europe/London. A match starting past 11pm is too late to bother with."""
     local = m.start_utc.astimezone(LONDON).time()
     return WATCH_WINDOW_START <= local < WATCH_WINDOW_END
 
@@ -68,6 +72,13 @@ def is_in_office_hours(m: Match) -> bool:
     if local_dt.weekday() not in OFFICE_DAYS:
         return False
     return OFFICE_HOURS_START <= local_dt.time() < OFFICE_HOURS_END
+
+
+def _with_court(m: Match) -> Match:
+    """Attach the court/venue name (best-effort) to a match for display."""
+    from dataclasses import replace
+    court = fetch_event_court(m.sofa_id)
+    return replace(m, court=court) if court else m
 
 
 def select_matches(matches: Iterable[Match]) -> list[Match]:
@@ -126,10 +137,11 @@ def main(argv: list[str] | None = None) -> int:
     calendar_id = args.calendar_id or os.environ.get("TARGET_CALENDAR_ID")
     service = None
 
-    # Conservative conflict check: drop a match only if it's 100% covered
-    # by busy time on the personal (Google) or work (ICS) calendar. Any
-    # free gap keeps it. Run BEFORE de-overlap so the best *available*
-    # match wins each timeslot. (No clipping — full block is pushed.)
+    # Conflict check: drop a match if it overlaps ANY existing event on the
+    # personal (Google) or work (ICS) calendar, even partially — the user
+    # doesn't want tennis written over something already booked. Run BEFORE
+    # de-overlap so a clashing match is gone before slot selection. (Our own
+    # pushed events are excluded from the busy set, so no self-conflict.)
     busy_ids = busy_calendar_ids()
     ics_urls = busy_ics_urls()
     if (busy_ids or ics_urls) and not args.dry_run and pushable:
@@ -142,13 +154,20 @@ def main(argv: list[str] | None = None) -> int:
         if ics_urls:
             busy.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
         before = len(pushable)
-        pushable = filter_fully_subsumed(pushable, busy)
-        log.info("After fully-busy filter: %d (dropped %d)", len(pushable), before - len(pushable))
+        pushable = filter_no_overlap(pushable, busy)
+        log.info("After overlap filter: %d (dropped %d)", len(pushable), before - len(pushable))
     elif (busy_ids or ics_urls) and args.dry_run:
-        log.info("[dry-run] would drop matches fully covered by %d google + %d ICS feeds",
+        log.info("[dry-run] would drop matches overlapping any event on %d google + %d ICS feeds",
                  len(busy_ids), len(ics_urls))
 
     deduped = pick_non_overlapping(pushable)
+    # Back-to-back matches at the same tournament (e.g. two Wimbledon semis on
+    # Centre Court) are sequential — stack them so each keeps a full block and
+    # later ones start when the previous finishes (no overlap).
+    deduped = stack_sequential_matches(deduped)
+    # Enrich the final selection with court/venue (per-event call — cheap for
+    # this handful). Best-effort; matches without a court are left as-is.
+    deduped = [_with_court(m) for m in deduped]
     log.info("After internal de-overlap: %d", len(deduped))
 
     # Safety: only skip prune when Sofa itself returned nothing (likely

@@ -38,13 +38,20 @@ ROUND_WEIGHT = {
 FAVORITES = {
     # Vietnamese-American rising ATP player — user's headline pick.
     "Learner Tien",
-    # British contingent — user is UK-based and wants the Brits in.
-    "Katie Boulter",
+    # Personal picks the user named directly.
+    "Grigor Dimitrov",
+    "Madison Keys",
+    "Alexandra Eala",
+    # The Brits the user actually cares about.
     "Emma Raducanu",
-    "Jack Draper",
-    "Cameron Norrie",
-    "Dan Evans",
-    "Sonay Kartal",
+    "Arthur Fery",
+}
+
+# National football teams the user follows. A match featuring one of these
+# always survives dedup (see pick_non_overlapping) — matched against
+# Player.full_name, which for football holds the team name.
+FOOTBALL_FAVORITES = {
+    "England",
 }
 
 UNRANKED = 9999
@@ -95,10 +102,12 @@ def score_match(m: Match) -> Match:
     if m.tour == "football":
         tier = 10.0
         rnd = FOOTBALL_ROUND_WEIGHT.get(m.round_name, 2.0)
-        total = tier + rnd
+        fav = 2.0 if (m.player_a.full_name in FOOTBALL_FAVORITES
+                      or m.player_b.full_name in FOOTBALL_FAVORITES) else 0.0
+        total = tier + rnd + fav
         breakdown = {
             "tier": tier, "round": rnd, "ranking": 0.0,
-            "favorite": 0.0, "headliner": 0.0, "total": total,
+            "favorite": fav, "headliner": 0.0, "total": total,
         }
         return replace(m, score=total, score_breakdown=breakdown)
 

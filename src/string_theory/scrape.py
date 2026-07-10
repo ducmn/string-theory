@@ -33,7 +33,7 @@ from .models import Match, Player
 
 log = logging.getLogger(__name__)
 
-DEFAULT_API = "https://www.sofascore.com/api/v1"
+DEFAULT_API = "https://api.sofascore.com/api/v1"
 IMPERSONATE = "chrome"
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
@@ -56,6 +56,30 @@ def _api_base() -> str:
 ATP_RANKING_TYPE = 5
 WTA_RANKING_TYPE = 6
 
+# Sofascore retired the flat `/sport/{sport}/scheduled-events/{date}` endpoint
+# (it now 404s for every date). The per-category variant
+# `/category/{id}/scheduled-events/{date}` still works, so we fetch by
+# category instead. These are the tennis category IDs that carry main-tour
+# singles — Grand Slams show up under the ATP/WTA categories too (e.g.
+# Wimbledon has category.slug "atp"/"wta", tennisPoints 2000).
+TENNIS_CATEGORIES = {3: "atp", 6: "wta"}
+
+# Football category IDs to scan. `/category/{id}/scheduled-events/{date}`
+# returns every competition tagged under that category; we then filter down
+# to FOOTBALL_ALLOWLIST by uniqueTournament slug + round. World = FIFA World
+# Cup / international; Europe = UEFA club comps + Euros; the domestic ones
+# cover the national cup finals in the allowlist.
+FOOTBALL_CATEGORIES = {
+    1468: "World",
+    1465: "Europe",
+    1469: "North & Central America",
+    1470: "South America",
+    1: "England",
+    32: "Spain",
+    31: "Italy",
+    30: "Germany",
+}
+
 
 _TIER_BY_POINTS = {
     2000: "GS",
@@ -66,7 +90,11 @@ _TIER_BY_POINTS = {
 
 _ROUND_SHORT = {
     "Final": "F",
+    # Sofascore returns plural round names ("Semifinals"); keep the singular
+    # forms too in case the schema differs across endpoints/sports.
+    "Semifinals": "SF",
     "Semifinal": "SF",
+    "Quarterfinals": "QF",
     "Quarterfinal": "QF",
     "Round of 16": "R16",
     "Round of 32": "R32",
@@ -109,12 +137,50 @@ def fetch_rankings() -> dict[int, int]:
 
 
 def fetch_scheduled_events(date: str) -> list[dict]:
-    """Raw events for a given calendar date (YYYY-MM-DD)."""
-    return _get_json_path(f"/sport/tennis/scheduled-events/{date}").get("events", [])
+    """Raw tennis events for a given calendar date (YYYY-MM-DD).
+
+    Fetches each main-tour category (ATP, WTA) and concatenates. The old
+    flat `/sport/tennis/scheduled-events/{date}` endpoint is dead (404).
+    """
+    events: list[dict] = []
+    for cid in TENNIS_CATEGORIES:
+        try:
+            events.extend(
+                _get_json_path(f"/category/{cid}/scheduled-events/{date}").get("events", [])
+            )
+        except RuntimeError as e:
+            # A single failing category shouldn't sink the whole date.
+            log.warning("category %s scheduled-events failed for %s: %s", cid, date, e)
+    return events
 
 
 def _round_short(name: str) -> str:
     return _ROUND_SHORT.get(name, name.replace(" ", ""))
+
+
+def _strip_gender(name: str) -> str:
+    """Sofascore names Grand Slam draws "Wimbledon, Men" / "Wimbledon, Women".
+    The user doesn't want the gender qualifier, so drop a trailing ", Men" /
+    ", Women" (and the bare " Men"/" Women" variant)."""
+    for suffix in (", Men", ", Women", " Men", " Women"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)].rstrip(", ")
+    return name
+
+
+def fetch_event_court(sofa_id: int) -> str | None:
+    """Best-effort court/venue name for a single event (e.g. "Centre Court").
+
+    Only the per-event detail endpoint carries `venue`; the scheduled-events
+    list does not. Called just for the handful of finally-selected matches so
+    we don't hit this endpoint for every candidate. Returns None on any
+    failure — court is a nice-to-have, never fatal."""
+    try:
+        data = _get_json_path(f"/event/{sofa_id}")
+    except RuntimeError:
+        return None
+    venue = ((data.get("event") or {}).get("venue")) or {}
+    return venue.get("name") or None
 
 
 def _normalize_surface(s: str) -> str:
@@ -149,7 +215,15 @@ def _team_to_player(team: dict, rankings: dict[int, int]) -> Player:
 
 def _is_singles(event: dict) -> bool:
     cats = (event.get("eventFilters") or {}).get("category") or []
-    return "singles" in cats
+    if "singles" not in cats:
+        return False
+    # Sofascore occasionally mis-tags a doubles match as "singles" (e.g. a
+    # women's doubles pair). Doubles team names are always "Surname X /
+    # Surname Y" — reject anything with a slash on either side.
+    for side in ("homeTeam", "awayTeam"):
+        if "/" in ((event.get(side) or {}).get("name") or ""):
+            return False
+    return True
 
 
 def _is_main_tour(event: dict) -> bool:
@@ -182,7 +256,7 @@ def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[M
             sofa_id=ev["id"],
             tour=tour,
             tournament_slug=ut.get("slug") or "",
-            tournament_name=ut.get("name") or "",
+            tournament_name=_strip_gender(ut.get("name") or ""),
             tournament_tier=_tier_label(tour, ut.get("tennisPoints")),
             surface=_normalize_surface(ev.get("groundType") or ut.get("groundType") or ""),
             year=int(ev.get("season", {}).get("year") or datetime.utcnow().year),
@@ -203,9 +277,11 @@ def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[M
 FOOTBALL_ALLOWLIST: dict[str, list[str]] = {
     "uefa-champions-league": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
     "uefa-europa-league": ["Quarterfinal", "Semifinal", "Final"],
-    "uefa-conference-league": ["Semifinal", "Final"],
-    "fifa-world-cup": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
-    "uefa-euro": ["Quarterfinal", "Semifinal", "Final"],
+    "uefa-europa-conference-league": ["Semifinal", "Final"],
+    # Sofascore's slug for the FIFA World Cup is "world-championship"
+    # (uniqueTournament id 16). Round names are plural ("Quarterfinals",
+    # "Semifinals") — the substring match below handles that.
+    "world-championship": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
     "european-championship": ["Quarterfinal", "Semifinal", "Final"],
     "copa-america": ["Quarterfinal", "Semifinal", "Final"],
     "concacaf-champions-cup": ["Final"],
@@ -240,7 +316,14 @@ def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
     for d in range(days_ahead + 1):
         date_str = (today + timedelta(days=d)).isoformat()
         log.info("Fetching football events for %s", date_str)
-        events = _get_json_path(f"/sport/football/scheduled-events/{date_str}").get("events", [])
+        events: list[dict] = []
+        for cid in FOOTBALL_CATEGORIES:
+            try:
+                events.extend(
+                    _get_json_path(f"/category/{cid}/scheduled-events/{date_str}").get("events", [])
+                )
+            except RuntimeError as e:
+                log.warning("football category %s failed for %s: %s", cid, date_str, e)
         for ev in events:
             if (ev.get("status") or {}).get("type") not in ("notstarted", "inprogress"):
                 continue

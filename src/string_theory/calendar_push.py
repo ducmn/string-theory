@@ -26,30 +26,45 @@ log = logging.getLogger(__name__)
 
 LONDON = ZoneInfo("Europe/London")
 
-# Cap every event end at 22:30 London — past that, the user is asleep.
-# An 18:00 BST 3h match would otherwise run to 21:00 (fine), a 21:00 BST
-# match to 00:00 (not fine) — we clip the latter to a 21:00–22:30 block.
-WATCH_END_HOUR = 22
-WATCH_END_MIN = 30
+# Cap every event end at 23:00 London — past that, the user is asleep.
+# An 18:00 BST match runs to ~20:00 (fine); a 21:30 BST match would run past
+# midnight, so we clip it to a 21:30–23:00 block.
+WATCH_END_HOUR = 23
+WATCH_END_MIN = 0
 
 
 def _clip_to_bedtime(start_local, end_local):
-    """Cap end_local at 22:30 on start_local's *date*. Caller guarantees
-    start_local is already < 22:30 (enforced by the watch-window filter)."""
+    """Cap end_local at 23:00 on start_local's *date*. Caller guarantees
+    start_local is already < 23:00 (enforced by the watch-window filter)."""
     cap = start_local.replace(hour=WATCH_END_HOUR, minute=WATCH_END_MIN, second=0, microsecond=0)
     return min(end_local, cap)
+
+
+def _is_favorite_match(m) -> bool:
+    """True if a named favorite (a favorite player, or England) is playing.
+    These get to run past bedtime — see _clip_end."""
+    return bool((getattr(m, "score_breakdown", None) or {}).get("favorite", 0.0) > 0)
+
+
+def _clip_end(start_local, end_local, m):
+    """Cap the event end at bedtime (23:00) — UNLESS a favorite is playing,
+    in which case let the block run to its natural end so the user can watch
+    to the finish ('if england game then can stay up a bit... adjust sleep')."""
+    if _is_favorite_match(m):
+        return end_local
+    return _clip_to_bedtime(start_local, end_local)
 
 
 # WTA is always best-of-3 (median ~100 min), so shorter blocks. ATP is
 # best-of-3 at non-slams and best-of-5 at Grand Slams (median ~150 min,
 # tail to 5h+); the ATP table is generous to cover both.
 DURATION_MINUTES_WTA = {
-    "F": 210, "SF": 180, "QF": 165,
-    "R16": 150, "R32": 150, "R64": 150, "R128": 90,
+    "F": 135, "SF": 120, "QF": 120,
+    "R16": 105, "R32": 105, "R64": 105, "R128": 90,
 }
 DURATION_MINUTES_ATP = {
-    "F": 300, "SF": 270, "QF": 240,
-    "R16": 210, "R32": 180, "R64": 180, "R128": 120,
+    "F": 180, "SF": 165, "QF": 150,
+    "R16": 135, "R32": 120, "R64": 120, "R128": 105,
 }
 # Kept as the legacy default for code paths that don't know the tour
 # (e.g. when something fails to populate Match.tour).
@@ -99,25 +114,21 @@ def _tournament_display(slug: str) -> str:
 def event_title(m: Match) -> str:
     a = m.player_a.short_name or m.player_a.full_name
     b = m.player_b.short_name or m.player_b.full_name
+    court_suffix = f" · {m.court}" if m.court else ""
     surface_suffix = f" ({m.surface})" if m.surface else ""
-    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short}{surface_suffix}"
+    return f"{a} vs {b}, {_tournament_display(m.tournament_slug)} {m.round_short}{court_suffix}{surface_suffix}"
 
 
 def event_description(m: Match) -> str:
-    bd = m.score_breakdown or {}
-    breakdown_str = " + ".join(f"{k} {v}" for k, v in bd.items() if k != "total")
     rank_a = m.player_a.ranking or "NR"
     rank_b = m.player_b.ranking or "NR"
+    court_bit = f", {m.court}" if m.court else ""
     return "\n".join([
         f"📊 Live score: https://www.sofascore.com/event/{m.sofa_id}",
         "",
-        f"{m.tournament_name} ({m.tournament_tier}, {m.round_name}, {m.surface})",
+        f"{m.tournament_name} ({m.tournament_tier}, {m.round_name}, {m.surface}{court_bit})",
         f"{m.player_a.full_name} (#{rank_a}, {m.player_a.country_code}) "
         f"vs {m.player_b.full_name} (#{rank_b}, {m.player_b.country_code})",
-        "",
-        f"Score: {bd.get('total', m.score)} = {breakdown_str}",
-        "",
-        f"key: {legible_event_key(m)}",
     ])
 
 
@@ -137,10 +148,10 @@ def match_to_event(m: Match) -> dict:
     daily sessions via build_session_events()."""
     if m.event_clip_start_utc and m.event_clip_end_utc:
         start = m.event_clip_start_utc.astimezone(LONDON)
-        end = _clip_to_bedtime(start, m.event_clip_end_utc.astimezone(LONDON))
+        end = _clip_end(start, m.event_clip_end_utc.astimezone(LONDON), m)
     else:
         start = m.start_utc.astimezone(LONDON)
-        end = _clip_to_bedtime(start, start + _duration_for(m))
+        end = _clip_end(start, start + _duration_for(m), m)
     return {
         "id": calendar_event_id(m),
         "summary": event_title(m),
@@ -246,8 +257,69 @@ def _load_service_account_json() -> str:
     )
 
 
+# --- OAuth user credentials (installed/desktop-app flow) --------------------
+#
+# The original design used a Google service account with the target calendar
+# shared to it. When no service account is configured we fall back to OAuth
+# *user* credentials — a desktop-app client JSON plus a saved token with a
+# refresh_token (the exact shape produced by google-auth-oauthlib and by the
+# Node googleapis library, e.g. the foodcycle-slot-scout creds). We refresh
+# the access token on the fly; no interactive consent happens here.
+
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+def _build_oauth_service(client_json: str, token_json: str):
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+
+    client = json.loads(client_json)
+    client = client.get("installed") or client.get("web") or client
+    token = json.loads(token_json)
+
+    creds = Credentials(
+        token=token.get("access_token") or token.get("token"),
+        refresh_token=token.get("refresh_token"),
+        token_uri=token.get("token_uri") or GOOGLE_TOKEN_URI,
+        client_id=client.get("client_id") or token.get("client_id"),
+        client_secret=client.get("client_secret") or token.get("client_secret"),
+        scopes=token.get("scopes") or (token.get("scope") or "").split() or SCOPES,
+    )
+    # The stored access token is usually expired; refresh it if we can.
+    if not creds.valid and creds.refresh_token:
+        creds.refresh(Request())
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+def _read_file_or_inline(value: str) -> str:
+    if value.lstrip().startswith("{"):
+        return value
+    with open(value, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 def build_calendar_service():
-    """Build an authed Google Calendar service from env-configured credentials."""
+    """Build an authed Google Calendar service from env-configured credentials.
+
+    Preference order:
+      1. Service account  — GOOGLE_SERVICE_ACCOUNT_JSON (path or inline JSON).
+      2. OAuth user creds — GOOGLE_OAUTH_CLIENT_JSON + GOOGLE_OAUTH_TOKEN_JSON
+         (paths or inline JSON), e.g. a reused desktop-app client + token with
+         a refresh_token.
+    """
+    sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if sa or os.path.exists(os.path.join(os.getcwd(), "service-account.json")):
+        try:
+            return _build_service(_load_service_account_json())
+        except (FileNotFoundError, ValueError, KeyError) as e:
+            log.warning("service-account auth unavailable (%s); trying OAuth user creds", e)
+
+    client_env = os.environ.get("GOOGLE_OAUTH_CLIENT_JSON")
+    token_env = os.environ.get("GOOGLE_OAUTH_TOKEN_JSON")
+    if client_env and token_env:
+        return _build_oauth_service(_read_file_or_inline(client_env), _read_file_or_inline(token_env))
+
+    # Last resort: attempt service-account path (raises a clear error).
     return _build_service(_load_service_account_json())
 
 

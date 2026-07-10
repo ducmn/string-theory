@@ -187,18 +187,45 @@ def test_iga_r128_score_seven_just_clears_threshold():
     assert is_pushable(scored)
 
 
-def test_favorites_include_tien_and_brits():
-    """Tien is the headline pick; British contingent added 2026-05-25."""
+def test_favorites_are_user_named_picks():
+    """The user's named picks: Tien (headline), Dimitrov, Keys, Eala, plus
+    Raducanu and Fery on the British side. The wider British contingent was
+    dropped 2026-07-10 — the user said they only care about Emma and Fery."""
     from string_theory.score import favorite_bonus, FAVORITES
-    assert "Learner Tien" in FAVORITES
-    for brit in ("Katie Boulter", "Emma Raducanu", "Jack Draper",
-                 "Cameron Norrie", "Dan Evans", "Sonay Kartal"):
-        assert brit in FAVORITES, f"{brit} should be a favorite"
+    for name in ("Learner Tien", "Grigor Dimitrov", "Madison Keys",
+                 "Alexandra Eala", "Emma Raducanu", "Arthur Fery"):
+        assert name in FAVORITES, f"{name} should be a favorite"
+    # Dropped Brits are no longer favorites
+    for dropped in ("Katie Boulter", "Jack Draper", "Cameron Norrie",
+                    "Dan Evans", "Sonay Kartal"):
+        assert dropped not in FAVORITES, f"{dropped} should have been dropped"
     # Non-favorites stay non-favorites
     assert favorite_bonus("Iga Swiatek", "Random") == 0.0
     assert favorite_bonus("Alex de Minaur", "Random") == 0.0
-    assert favorite_bonus("Katie Boulter", "Random") == 2.0
+    assert favorite_bonus("Madison Keys", "Random") == 2.0
     assert favorite_bonus("Learner Tien", "Random") == 2.0
+
+
+def test_football_favorite_bonus_for_england():
+    """A World Cup match featuring England gets the favorite bonus so it wins
+    dedup against a same-slot non-favorite football match."""
+    def fb(home, away):
+        return Match(
+            sofa_id=1, tour="football", tournament_slug="world-championship",
+            tournament_name="FIFA World Cup", tournament_tier="FOOTBALL",
+            surface="", year=2026, round_name="Quarterfinals", round_short="Quarterfinals",
+            start_utc=datetime(2026, 7, 11, 20, 0, tzinfo=timezone.utc),
+            player_a=Player(sofa_id=1, full_name=home, short_name=home,
+                            country_code="", slug=home.lower(), ranking=None),
+            player_b=Player(sofa_id=2, full_name=away, short_name=away,
+                            country_code="", slug=away.lower(), ranking=None),
+        )
+
+    eng = score_match(fb("Norway", "England"))
+    other = score_match(fb("Spain", "Belgium"))
+    assert eng.score_breakdown["favorite"] == 2.0
+    assert other.score_breakdown["favorite"] == 0.0
+    assert eng.score > other.score
 
 
 def test_non_gs_at_score_8_is_pushable_again():

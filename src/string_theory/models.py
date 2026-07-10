@@ -31,6 +31,7 @@ class Match:
     player_b: Player
     score_breakdown: dict = field(default_factory=dict)
     score: float = 0.0
+    court: Optional[str] = None        # e.g. "Centre Court" (tennis), best-effort
     # When a busy-event partially overlaps the natural match window, the
     # busy filter clips the event to the largest free contiguous segment
     # and records the clipped window here. Calendar event creation prefers

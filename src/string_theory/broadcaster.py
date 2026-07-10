@@ -14,9 +14,9 @@ _RIGHTS_BY_SLUG = {
     # Football — UK rights as of 2026
     "uefa-champions-league": "TNT Sports / Amazon Prime",
     "uefa-europa-league": "TNT Sports",
-    "uefa-conference-league": "TNT Sports",
-    "fifa-world-cup": "BBC iPlayer / ITVX",
-    "uefa-euro": "BBC iPlayer / ITVX",
+    "uefa-europa-conference-league": "TNT Sports",
+    # Sofascore's slug for the FIFA World Cup is "world-championship".
+    "world-championship": "BBC iPlayer / ITVX",
     "european-championship": "BBC iPlayer / ITVX",
     "copa-america": "Premier Sports",
     "concacaf-champions-cup": "Premier Sports",

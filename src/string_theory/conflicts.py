@@ -20,7 +20,7 @@ from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
-from .calendar_push import LONDON, _clip_to_bedtime, duration_minutes
+from .calendar_push import LONDON, _clip_end, duration_minutes
 from .models import Match
 
 log = logging.getLogger(__name__)
@@ -30,7 +30,9 @@ def match_interval(m: Match) -> tuple[datetime, datetime]:
     start = m.start_utc
     start_local = start.astimezone(LONDON)
     raw_end_local = start_local + timedelta(minutes=duration_minutes(m))
-    end = _clip_to_bedtime(start_local, raw_end_local).astimezone(start.tzinfo)
+    # Favorite matches (incl. England) run past bedtime, so their interval
+    # reflects the full block here too — used for overlap/dedup math.
+    end = _clip_end(start_local, raw_end_local, m).astimezone(start.tzinfo)
     return start, end
 
 
@@ -87,6 +89,47 @@ def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
     return kept
 
 
+def stack_sequential_matches(matches: list[Match]) -> list[Match]:
+    """Same-tournament matches share the show court and are played back-to-back.
+    Each keeps its FULL block; a later match's listed start time is only a "not
+    before" — it really begins when the previous one finishes. So we stack
+    them: give the first match its natural block and push each subsequent
+    same-tournament match's start to when the previous block ends. Result:
+    realistic per-match durations AND no overlap.
+
+    e.g. two Wimbledon men's semis on Centre Court, each a ~2h45 block:
+    13:30–16:15 (Fery), then 16:15–19:00 (Sinner) instead of squashing the
+    first into 13:30–15:10. Different tournaments are left alone (separate
+    courts / channels can run concurrently)."""
+    from dataclasses import replace as _replace
+    from collections import defaultdict
+
+    out = list(matches)
+    groups: dict = defaultdict(list)
+    for i, m in enumerate(out):
+        groups[m.tournament_slug].append(i)
+
+    for _slug, idxs in groups.items():
+        idxs.sort(key=lambda i: out[i].start_utc)
+        cursor = None  # UTC datetime the show court next frees up
+        for i in idxs:
+            m = out[i]
+            if cursor is not None and cursor > m.start_utc:
+                # Court still busy at this match's listed start → push it back.
+                new_start = cursor
+                raw_end = new_start + timedelta(minutes=duration_minutes(m))
+                new_end = _clip_end(new_start.astimezone(LONDON),
+                                    raw_end.astimezone(LONDON),
+                                    m).astimezone(new_start.tzinfo)
+                out[i] = _replace(m, event_clip_start_utc=new_start,
+                                  event_clip_end_utc=new_end)
+                cursor = new_end
+            else:
+                # First (or non-overlapping) match keeps its natural block.
+                _, cursor = match_interval(m)
+    return out
+
+
 def fetch_busy_intervals(service, calendar_ids: list[str], time_min: datetime, time_max: datetime
                          ) -> list[tuple[datetime, datetime]]:
     """Pull busy intervals from each Google calendar via `events.list`.
@@ -110,12 +153,20 @@ def fetch_busy_intervals(service, calendar_ids: list[str], time_min: datetime, t
                     orderBy="startTime",
                     pageToken=page_token,
                     maxResults=2500,
-                    fields="items(summary,start,end,status,transparency),nextPageToken",
+                    fields="items(id,summary,start,end,status,transparency),nextPageToken",
                 ).execute()
                 for ev in resp.get("items", []):
                     if ev.get("status") == "cancelled":
                         continue
                     if ev.get("transparency") == "transparent":  # "Free" events
+                        continue
+                    # Skip our own pushed events (id = "st"+sha1). Otherwise,
+                    # when the target calendar is also a busy source (e.g.
+                    # TARGET_CALENDAR_ID=primary), a match would count its own
+                    # event as "busy", get dropped as fully-subsumed, pruned,
+                    # then re-added next run — an hourly flap.
+                    eid = ev.get("id", "")
+                    if eid.startswith("st") and len(eid) >= 40:
                         continue
                     s = _parse_event_dt(ev.get("start"))
                     e = _parse_event_dt(ev.get("end"))
@@ -225,6 +276,38 @@ def _largest_free_segment(window: tuple[datetime, datetime],
                 new_free.append((be, fe))
         free = new_free
     return max(free, key=lambda x: x[1] - x[0]) if free else None
+
+
+def filter_no_overlap(matches: list[Match],
+                      busy: list[tuple[datetime, datetime]]) -> list[Match]:
+    """Drop a match if its window overlaps ANY busy interval at all.
+
+    Stricter than filter_fully_subsumed: the user doesn't want a match
+    written onto the calendar if it clashes with an existing event even
+    partially. (Our own pushed events are excluded upstream in
+    fetch_busy_intervals, so a match never conflicts with itself.)
+    """
+    if not busy:
+        return list(matches)
+    out: list[Match] = []
+    for m in matches:
+        # A favorite (a favorite player, or England) is must-watch: never drop
+        # it for clashing with an existing event — the user has said they'll
+        # watch it anyway (and stay up past bedtime for it).
+        if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
+            out.append(m)
+            continue
+        iv = match_interval(m)
+        clash = next((b for b in busy if _overlaps(iv, b)), None)
+        if clash is not None:
+            log.info("skip (overlaps existing event %s–%s): %s vs %s @ %s",
+                     clash[0].astimezone(LONDON).strftime("%a %H:%M"),
+                     clash[1].astimezone(LONDON).strftime("%H:%M"),
+                     m.player_a.short_name, m.player_b.short_name,
+                     m.start_utc.astimezone(LONDON).strftime("%a %H:%M"))
+            continue
+        out.append(m)
+    return out
 
 
 def filter_fully_subsumed(matches: list[Match],
