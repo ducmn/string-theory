@@ -360,33 +360,19 @@ def test_busy_filter_drops_when_free_segment_too_short():
     assert out == []
 
 
-def test_office_hours_blackout_tue_thu():
-    """Tue/Thu 09:00–18:00 London is blanket-skipped regardless of conflicts."""
+def test_office_hours_matches_allowed_when_free():
+    """Office-hours matches are no longer blanket-blocked — a Tue daytime match
+    with no work-calendar clash is kept; conflicts are handled per-meeting."""
     from zoneinfo import ZoneInfo
-    from string_theory.models import Match, Player
-    from string_theory.main import is_in_office_hours
+    from string_theory.main import select_matches
 
     LONDON = ZoneInfo("Europe/London")
-    # Tue May 12 2026, 10:00 BST
-    tue_start = datetime(2026, 5, 12, 10, 0, tzinfo=LONDON)
-    p = Player(sofa_id=1, full_name="A", short_name="A", country_code="USA", slug="a")
-    q = Player(sofa_id=2, full_name="B", short_name="B", country_code="USA", slug="b")
-    m_tue = Match(sofa_id=1, tour="atp", tournament_slug="rome", tournament_name="Rome",
-                  tournament_tier="M1000", surface="clay", year=2026,
-                  round_name="R32", round_short="R32",
-                  start_utc=tue_start.astimezone(timezone.utc),
-                  player_a=p, player_b=q)
-    assert is_in_office_hours(m_tue) is True
-
-    # Wed May 13 2026, 10:00 BST — not an office day
-    wed_start = datetime(2026, 5, 13, 10, 0, tzinfo=LONDON)
-    m_wed = replace(m_tue, start_utc=wed_start.astimezone(timezone.utc))
-    assert is_in_office_hours(m_wed) is False
-
-    # Tue 19:00 BST — past office hours
-    tue_eve = datetime(2026, 5, 12, 19, 0, tzinfo=LONDON)
-    m_tue_eve = replace(m_tue, start_utc=tue_eve.astimezone(timezone.utc))
-    assert is_in_office_hours(m_tue_eve) is False
+    # Tue May 12 2026, 10:00 BST — an office-hours slot, but no busy check here.
+    tue_start = datetime(2026, 5, 12, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    m = replace(make_match(sofa_id=1, start=tue_start, round_short="F"),
+                score_breakdown={"favorite": 2.0}, score=8.0)
+    kept = select_matches([m])
+    assert [x.sofa_id for x in kept] == [1]
 
 
 def test_wta_match_uses_shorter_duration_than_atp():
