@@ -304,26 +304,37 @@ def _largest_free_segment(window: tuple[datetime, datetime],
 
 def split_matches_around_busy(matches: list[Match],
                               busy: list[tuple[datetime, datetime]],
-                              min_free_minutes: int = MIN_FREE_MINUTES) -> list[Match]:
+                              min_free_minutes: int = MIN_FREE_MINUTES,
+                              work_busy: list[tuple[datetime, datetime]] | None = None
+                              ) -> list[Match]:
     """Instead of dropping a match that overlaps an existing event, CUT IT
     SHORT — and if the conflict is in the middle, split it so the user can
     RESUME after. Each qualifying free segment (>= min_free_minutes) becomes
     its own event (part=1, part=2 "resume", ...). A segment shorter than the
     floor is discarded; if nothing qualifies the match drops out entirely.
 
-    Favorites (a favorite player, or England) are must-watch and are never
-    cut or split — they run their full block over the top of anything."""
+    Two classes of busy time:
+    - `busy` (personal calendar): favorites (a favorite player, or England)
+      are must-watch and IGNORE it — they run their full block over the top.
+    - `work_busy` (work calendar): a hard commitment everyone yields to,
+      favorites included. The user won't watch even Dimitrov over a work
+      meeting, so favorites get cut/split around it (and dropped if no
+      adequate free segment remains) just like any other match."""
     from dataclasses import replace as _replace
 
-    if not busy:
+    work_busy = work_busy or []
+    if not busy and not work_busy:
         return list(matches)
     out: list[Match] = []
     for m in matches:
-        if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
+        is_fav = (m.score_breakdown or {}).get("favorite", 0.0) > 0
+        # Favorites yield only to work; everyone else yields to all busy time.
+        applicable = list(work_busy) if is_fav else [*busy, *work_busy]
+        if not applicable:
             out.append(m)
             continue
         iv = match_interval(m)
-        segs = [s for s in _free_segments(iv, busy)
+        segs = [s for s in _free_segments(iv, applicable)
                 if (s[1] - s[0]).total_seconds() / 60 >= min_free_minutes]
         if not segs:
             log.info("skip (busy conflict): %s vs %s @ %s",
@@ -455,6 +466,136 @@ def busy_ics_urls() -> list[str]:
 ICS_MAX_BUSY_HOURS = 18
 
 
+_WEEKDAY_CODES = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+
+
+def _parse_until(raw: str, tz) -> datetime | None:
+    """Parse an RRULE UNTIL value (date or date-time, often UTC 'Z')."""
+    raw = raw.strip()
+    is_utc = raw.endswith("Z")
+    raw = raw.rstrip("Z")
+    try:
+        if "T" in raw:
+            dt = datetime.strptime(raw, "%Y%m%dT%H%M%S")
+        else:
+            dt = datetime.strptime(raw, "%Y%m%d")
+        return dt.replace(tzinfo=timezone.utc if is_utc else tz)
+    except ValueError:
+        return None
+
+
+def _parse_exdates(block: str) -> set[datetime]:
+    """Collect EXDATE values (cancelled occurrences) as naive local datetimes,
+    keyed by their local wall-clock start for comparison against occurrences."""
+    out: set[datetime] = set()
+    for m in re.finditer(r"\nEXDATE(;[^:\n]*)?:([^\r\n]+)", "\n" + block):
+        for val in m.group(2).split(","):
+            val = val.strip().rstrip("Z")
+            try:
+                if "T" in val:
+                    out.add(datetime.strptime(val, "%Y%m%dT%H%M%S"))
+                else:
+                    out.add(datetime.strptime(val, "%Y%m%d"))
+            except ValueError:
+                continue
+    return out
+
+
+def _add_months(dt: datetime, months: int) -> datetime:
+    """dt shifted by `months`, clamping the day to the target month's length."""
+    m = dt.month - 1 + months
+    year = dt.year + m // 12
+    month = m % 12 + 1
+    # Clamp day (e.g. Jan 31 + 1 month -> Feb 28/29).
+    for day in range(dt.day, 27, -1):
+        try:
+            return dt.replace(year=year, month=month, day=day)
+        except ValueError:
+            continue
+    return dt.replace(year=year, month=month, day=28)
+
+
+def _iter_occurrences(start: datetime, end: datetime, rrule: str,
+                      exdates: set[datetime], w_min: datetime, w_max: datetime,
+                      cap: int = 2000):
+    """Yield (occ_start, occ_end) for a recurring event that overlap
+    [w_min, w_max]. Minimal RFC 5545: FREQ DAILY/WEEKLY/MONTHLY/YEARLY with
+    INTERVAL, COUNT, UNTIL, and (weekly) BYDAY. Good enough for Outlook
+    meetings; unknown FREQ falls back to the single base occurrence."""
+    parts: dict[str, str] = {}
+    for kv in rrule.split(";"):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            parts[k.upper()] = v
+    freq = parts.get("FREQ", "").upper()
+    if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
+        if end > w_min and start < w_max:
+            yield (start, end)
+        return
+
+    interval = max(1, int(parts["INTERVAL"])) if parts.get("INTERVAL", "").isdigit() else 1
+    count = int(parts["COUNT"]) if parts.get("COUNT", "").isdigit() else None
+    until = _parse_until(parts["UNTIL"], start.tzinfo) if parts.get("UNTIL") else None
+    dur = end - start
+    tz = start.tzinfo
+    base = start.replace(tzinfo=None)  # local wall-clock anchor
+
+    weekdays = sorted(
+        _WEEKDAY_CODES[c[-2:]] for c in parts["BYDAY"].split(",")
+        if c and c[-2:] in _WEEKDAY_CODES
+    ) if parts.get("BYDAY") else [base.weekday()]
+
+    def _period_starts():
+        """Yield naive occurrence start datetimes in chronological order."""
+        if freq == "WEEKLY":
+            week0 = base - timedelta(days=base.weekday())  # Monday of week 0
+            p = 0
+            while True:
+                wk = week0 + timedelta(weeks=p * interval)
+                any_in_range = False
+                for wd in weekdays:
+                    nd = wk + timedelta(days=wd)
+                    if nd < base:      # before DTSTART in the first partial week
+                        continue
+                    any_in_range = True
+                    yield nd
+                # Stop once even the last weekday of the period is past the window.
+                if (wk + timedelta(days=weekdays[-1])).replace(tzinfo=tz) > w_max and any_in_range:
+                    return
+                if (wk + timedelta(days=weekdays[-1])).replace(tzinfo=tz) > w_max:
+                    return
+                p += 1
+        else:
+            p = 0
+            while True:
+                if freq == "DAILY":
+                    nd = base + timedelta(days=p * interval)
+                elif freq == "MONTHLY":
+                    nd = _add_months(base, p * interval)
+                else:  # YEARLY
+                    nd = _add_months(base, p * interval * 12)
+                yield nd
+                if nd.replace(tzinfo=tz) > w_max:
+                    return
+                p += 1
+
+    emitted = 0
+    for i, nd in enumerate(_period_starts()):
+        if i >= cap:
+            break
+        if count is not None and emitted >= count:
+            return
+        s = nd.replace(tzinfo=tz)
+        if until is not None and s > until:
+            return
+        emitted += 1
+        if nd in exdates:
+            continue
+        e = s + dur
+        if e > w_min and s < w_max:
+            yield (s, e)
+
+
 def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: datetime
                              ) -> list[tuple[datetime, datetime]]:
     """Pull DTSTART/DTEND from each ICS URL, return events overlapping the window.
@@ -465,7 +606,9 @@ def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: date
     - Skip events longer than ICS_MAX_BUSY_HOURS — a multi-day OOO event
       is not the kind of "busy" that should pre-empt a 2h tennis slot.
     - Floating times interpreted as Europe/London.
-    - Recurrence rules are not expanded (best-effort stdlib parser).
+    - Recurrence rules ARE expanded (FREQ DAILY/WEEKLY/MONTHLY/YEARLY with
+      INTERVAL/COUNT/UNTIL/BYDAY and EXDATE) so a weekly standup blocks every
+      week, not just its first occurrence — see _iter_occurrences.
 
     Stdlib-only by design — no icalendar pip dep — to keep the artefact small.
     """
@@ -500,12 +643,21 @@ def fetch_ics_busy_intervals(urls: list[str], time_min: datetime, time_max: date
                 start = start.replace(tzinfo=LONDON)
             if end.tzinfo is None:
                 end = end.replace(tzinfo=LONDON)
-            if end <= time_min or start >= time_max:
-                continue
             if (end - start).total_seconds() > ICS_MAX_BUSY_HOURS * 3600:
                 skipped_long += 1
                 continue
-            out.append((start, end))
+            rrule_m = re.search(r"\nRRULE:([^\r\n]+)", "\n" + block)
+            if rrule_m:
+                # Recurring meeting: only its first occurrence is in the feed,
+                # so expand the rule and emit every occurrence in the window.
+                exdates = _parse_exdates(block)
+                for s, e in _iter_occurrences(start, end, rrule_m.group(1).strip(),
+                                              exdates, time_min, time_max):
+                    out.append((s, e))
+            else:
+                if end <= time_min or start >= time_max:
+                    continue
+                out.append((start, end))
 
     log.info("ICS busy intervals across %d feeds: %d  (skipped %d all-day, %d multi-day)",
              len(urls), len(out), skipped_allday, skipped_long)

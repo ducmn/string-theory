@@ -140,9 +140,14 @@ def main(argv: list[str] | None = None) -> int:
     # Pull the user's existing commitments (personal Google + work ICS) so we
     # can cut matches short / split them around real events. Our own pushed
     # events are excluded from the busy set, so no self-conflict.
+    # Personal (Google) and work (ICS/Outlook) busy are kept separate: a
+    # favorite match runs over the top of personal commitments but must YIELD
+    # to the work calendar — the user won't watch even Dimitrov over a work
+    # meeting.
     busy_ids = busy_calendar_ids()
     ics_urls = busy_ics_urls()
-    busy: list = []
+    busy: list = []          # personal — favorites exempt
+    busy_work: list = []     # work — favorites yield too
     if (busy_ids or ics_urls) and not args.dry_run and pushable:
         time_min = min(m.start_utc for m in pushable) - timedelta(minutes=30)
         time_max = max(m.start_utc for m in pushable) + timedelta(hours=6)
@@ -150,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             service = build_calendar_service()
             busy.extend(fetch_busy_intervals(service, busy_ids, time_min, time_max))
         if ics_urls:
-            busy.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
+            busy_work.extend(fetch_ics_busy_intervals(ics_urls, time_min, time_max))
     elif (busy_ids or ics_urls) and args.dry_run:
         log.info("[dry-run] would cut/split matches around events on %d google + %d ICS feeds",
                  len(busy_ids), len(ics_urls))
@@ -164,10 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     deduped = stack_sequential_matches(deduped)
     # Against the user's real calendar: don't drop a clashing match — cut it
     # short, and if the clash is mid-match, split it so they can resume after.
-    # Favorites are exempt (they run over the top of anything). Uses the final
-    # stacked positions.
-    if busy:
-        deduped = split_matches_around_busy(deduped, busy)
+    # Favorites are exempt from PERSONAL busy (they run over the top) but still
+    # yield to the WORK calendar. Uses the final stacked positions.
+    if busy or busy_work:
+        deduped = split_matches_around_busy(deduped, busy, work_busy=busy_work)
     # Enrich the final selection with court/venue (per-event call — cheap for
     # this handful). Best-effort; matches without a court are left as-is.
     deduped = [_with_court(m) for m in deduped]

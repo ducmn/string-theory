@@ -252,6 +252,37 @@ def test_split_exempts_favorites():
     assert out[0].event_clip_start_utc is None  # untouched
 
 
+def test_favorite_yields_to_work_calendar():
+    """A favorite match is NOT exempt from the work calendar: a work meeting
+    fully covering its window drops it, unlike a personal event."""
+    from string_theory.conflicts import split_matches_around_busy
+    start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
+    m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")  # 180 min
+    m = replace(m, score_breakdown={"favorite": 2.0})
+    work = [(datetime(2026, 5, 9, 13, 0, tzinfo=timezone.utc),
+             datetime(2026, 5, 9, 18, 0, tzinfo=timezone.utc))]
+    # As personal busy it would be ignored; as work busy it drops the favorite.
+    assert len(split_matches_around_busy([m], work)) == 1
+    assert split_matches_around_busy([m], [], work_busy=work) == []
+
+
+def test_favorite_still_ignores_personal_but_splits_around_work():
+    """A favorite ignores a personal event but is cut short around a work one."""
+    from string_theory.conflicts import split_matches_around_busy
+    start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
+    m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")  # 180 min
+    m = replace(m, score_breakdown={"favorite": 2.0})
+    personal = [(datetime(2026, 5, 9, 14, 30, tzinfo=timezone.utc),
+                 datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc))]
+    work = [(datetime(2026, 5, 9, 16, 0, tzinfo=timezone.utc),
+             datetime(2026, 5, 9, 17, 0, tzinfo=timezone.utc))]
+    out = split_matches_around_busy([m], personal, work_busy=work)
+    # Personal event ignored; only the work event cuts the block to 14:00–16:00.
+    assert len(out) == 1
+    assert out[0].event_clip_start_utc == start
+    assert out[0].event_clip_end_utc == datetime(2026, 5, 9, 16, 0, tzinfo=timezone.utc)
+
+
 def test_pick_non_overlapping_prefers_tennis_over_football():
     """When a tennis and a football match heavily overlap, tennis wins even
     though football scores higher."""
@@ -471,3 +502,50 @@ def test_among_non_favorites_higher_score_wins():
                      score_breakdown={"favorite": 0.0, "total": 11.0})
     kept = pick_non_overlapping([lower, higher])
     assert [m.sofa_id for m in kept] == [2]
+
+
+# --- Recurring ICS meeting expansion ------------------------------------------
+
+def test_iter_occurrences_weekly_expands_future_weeks():
+    """A weekly meeting blocks a date months after its first occurrence."""
+    from zoneinfo import ZoneInfo
+    from string_theory.conflicts import _iter_occurrences
+    LON = ZoneInfo("Europe/London")
+    # Weekly Tue 11:00-12:00 starting long before the window.
+    start = datetime(2026, 1, 6, 11, 0, tzinfo=LON)   # a Tuesday
+    end = datetime(2026, 1, 6, 12, 0, tzinfo=LON)
+    w_min = datetime(2026, 7, 14, 0, 0, tzinfo=LON)   # a Tuesday, months later
+    w_max = datetime(2026, 7, 15, 0, 0, tzinfo=LON)
+    occ = list(_iter_occurrences(start, end, "FREQ=WEEKLY;UNTIL=20270706T060000Z",
+                                 set(), w_min, w_max))
+    assert len(occ) == 1
+    assert occ[0][0] == datetime(2026, 7, 14, 11, 0, tzinfo=LON)
+    assert occ[0][1] == datetime(2026, 7, 14, 12, 0, tzinfo=LON)
+
+
+def test_iter_occurrences_until_stops_series():
+    """No occurrence is emitted after the UNTIL bound."""
+    from zoneinfo import ZoneInfo
+    from string_theory.conflicts import _iter_occurrences
+    LON = ZoneInfo("Europe/London")
+    start = datetime(2026, 1, 6, 11, 0, tzinfo=LON)
+    end = datetime(2026, 1, 6, 12, 0, tzinfo=LON)
+    # Series ends in April; a July window sees nothing.
+    occ = list(_iter_occurrences(start, end, "FREQ=WEEKLY;UNTIL=20260414T100000Z",
+                                 set(), datetime(2026, 7, 14, tzinfo=LON),
+                                 datetime(2026, 7, 15, tzinfo=LON)))
+    assert occ == []
+
+
+def test_iter_occurrences_exdate_skips_cancelled():
+    """An EXDATE cancels that week's occurrence."""
+    from zoneinfo import ZoneInfo
+    from string_theory.conflicts import _iter_occurrences
+    LON = ZoneInfo("Europe/London")
+    start = datetime(2026, 7, 7, 11, 0, tzinfo=LON)   # Tue
+    end = datetime(2026, 7, 7, 12, 0, tzinfo=LON)
+    ex = {datetime(2026, 7, 14, 11, 0)}               # cancel the 14th
+    occ = list(_iter_occurrences(start, end, "FREQ=WEEKLY", ex,
+                                 datetime(2026, 7, 14, tzinfo=LON),
+                                 datetime(2026, 7, 15, tzinfo=LON)))
+    assert occ == []
