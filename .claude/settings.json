@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(launchctl list*)"
+      "Bash(launchctl list*)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
