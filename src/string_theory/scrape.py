@@ -169,8 +169,9 @@ def _strip_gender(name: str) -> str:
 
 
 def fetch_event_venue(sofa_id: int) -> str | None:
-    """Best-effort venue + city for a single event, e.g. "Centre Court, London"
-    or "Hard Rock Stadium, Miami Gardens" (no country).
+    """Best-effort venue + city + country for a single event, e.g.
+    "Centre Court, London, United Kingdom" or "Hard Rock Stadium, Miami
+    Gardens, USA".
 
     Only the per-event detail endpoint carries `venue`; the scheduled-events
     list does not. Called just for the handful of finally-selected matches so
@@ -183,7 +184,8 @@ def fetch_event_venue(sofa_id: int) -> str | None:
     venue = ((data.get("event") or {}).get("venue")) or {}
     name = venue.get("name")
     city = (venue.get("city") or {}).get("name")
-    return ", ".join(p for p in (name, city) if p) or None
+    country = ((venue.get("country") or (venue.get("city") or {}).get("country")) or {}).get("name")
+    return ", ".join(p for p in (name, city, country) if p) or None
 
 
 def _normalize_surface(s: str) -> str:
