@@ -313,28 +313,22 @@ def split_matches_around_busy(matches: list[Match],
     its own event (part=1, part=2 "resume", ...). A segment shorter than the
     floor is discarded; if nothing qualifies the match drops out entirely.
 
-    Two classes of busy time:
-    - `busy` (personal calendar): favorites (a favorite player, or England)
-      are must-watch and IGNORE it — they run their full block over the top.
-    - `work_busy` (work calendar): a hard commitment everyone yields to,
-      favorites included. The user won't watch even Dimitrov over a work
-      meeting, so favorites get cut/split around it (and dropped if no
-      adequate free segment remains) just like any other match."""
+    A match's calendar block must NEVER overlap an existing arrangement, so
+    EVERY match — favorites (a favorite player, or England) included — is cut
+    or split around both `busy` (personal) and `work_busy` (work). Favorites
+    keep their other perks (they win overlap dedup, run past bedtime, and
+    are always push-worthy), but they don't get written on top of a real
+    calendar event. `work_busy` is accepted separately only so callers can
+    pass the two sources without merging; both are treated identically here."""
     from dataclasses import replace as _replace
 
-    work_busy = work_busy or []
-    if not busy and not work_busy:
+    busy = [*busy, *(work_busy or [])]
+    if not busy:
         return list(matches)
     out: list[Match] = []
     for m in matches:
-        is_fav = (m.score_breakdown or {}).get("favorite", 0.0) > 0
-        # Favorites yield only to work; everyone else yields to all busy time.
-        applicable = list(work_busy) if is_fav else [*busy, *work_busy]
-        if not applicable:
-            out.append(m)
-            continue
         iv = match_interval(m)
-        segs = [s for s in _free_segments(iv, applicable)
+        segs = [s for s in _free_segments(iv, busy)
                 if (s[1] - s[0]).total_seconds() / 60 >= min_free_minutes]
         if not segs:
             log.info("skip (busy conflict): %s vs %s @ %s",

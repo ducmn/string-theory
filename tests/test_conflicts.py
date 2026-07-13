@@ -239,47 +239,50 @@ def test_split_creates_resume_block_on_mid_conflict():
     assert out[1].event_clip_end_utc == datetime(2026, 5, 9, 17, 0, tzinfo=timezone.utc)
 
 
-def test_split_exempts_favorites():
-    """A favorite match is never cut or split — runs its full block."""
+def test_split_cuts_favorites_too():
+    """A favorite's block is cut/split around a personal event — it must never
+    overlap an existing arrangement, even though favorites keep their other
+    perks (dedup priority, past-bedtime, always push-worthy)."""
     from string_theory.conflicts import split_matches_around_busy
     start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
-    m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")
+    m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")  # 180 min
     m = replace(m, score_breakdown={"favorite": 2.0})
     busy = [(datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc),
              datetime(2026, 5, 9, 15, 30, tzinfo=timezone.utc))]
     out = split_matches_around_busy([m], busy)
-    assert len(out) == 1
-    assert out[0].event_clip_start_utc is None  # untouched
+    # Split into 14:00–15:00 and 15:30–17:00 around the event.
+    assert len(out) == 2
+    assert out[0].event_clip_end_utc == datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc)
+    assert out[1].event_clip_start_utc == datetime(2026, 5, 9, 15, 30, tzinfo=timezone.utc)
 
 
-def test_favorite_yields_to_work_calendar():
-    """A favorite match is NOT exempt from the work calendar: a work meeting
-    fully covering its window drops it, unlike a personal event."""
+def test_favorite_dropped_when_fully_covered():
+    """A favorite whose whole window is covered by an arrangement is dropped,
+    from either the personal or the work list."""
     from string_theory.conflicts import split_matches_around_busy
     start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
     m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")  # 180 min
     m = replace(m, score_breakdown={"favorite": 2.0})
-    work = [(datetime(2026, 5, 9, 13, 0, tzinfo=timezone.utc),
-             datetime(2026, 5, 9, 18, 0, tzinfo=timezone.utc))]
-    # As personal busy it would be ignored; as work busy it drops the favorite.
-    assert len(split_matches_around_busy([m], work)) == 1
-    assert split_matches_around_busy([m], [], work_busy=work) == []
+    cover = [(datetime(2026, 5, 9, 13, 0, tzinfo=timezone.utc),
+              datetime(2026, 5, 9, 18, 0, tzinfo=timezone.utc))]
+    assert split_matches_around_busy([m], cover) == []
+    assert split_matches_around_busy([m], [], work_busy=cover) == []
 
 
-def test_favorite_still_ignores_personal_but_splits_around_work():
-    """A favorite ignores a personal event but is cut short around a work one."""
+def test_favorite_cut_around_both_personal_and_work():
+    """Both a personal and a work event cut a favorite's block."""
     from string_theory.conflicts import split_matches_around_busy
     start = datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
     m = replace(make_match(sofa_id=1, start=start, round_short="F"), tour="atp")  # 180 min
     m = replace(m, score_breakdown={"favorite": 2.0})
-    personal = [(datetime(2026, 5, 9, 14, 30, tzinfo=timezone.utc),
-                 datetime(2026, 5, 9, 15, 0, tzinfo=timezone.utc))]
+    personal = [(datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc),
+                 datetime(2026, 5, 9, 14, 45, tzinfo=timezone.utc))]
     work = [(datetime(2026, 5, 9, 16, 0, tzinfo=timezone.utc),
              datetime(2026, 5, 9, 17, 0, tzinfo=timezone.utc))]
     out = split_matches_around_busy([m], personal, work_busy=work)
-    # Personal event ignored; only the work event cuts the block to 14:00–16:00.
+    # Free chunk is 14:45–16:00 (the only segment >= 60 min).
     assert len(out) == 1
-    assert out[0].event_clip_start_utc == start
+    assert out[0].event_clip_start_utc == datetime(2026, 5, 9, 14, 45, tzinfo=timezone.utc)
     assert out[0].event_clip_end_utc == datetime(2026, 5, 9, 16, 0, tzinfo=timezone.utc)
 
 
