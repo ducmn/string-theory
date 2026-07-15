@@ -159,16 +159,33 @@ def test_djokovic_prizmic_m1000_r64_is_pushable_at_threshold_seven():
     assert is_pushable(scored)
 
 
-def test_low_scored_tien_match_is_still_pushable_via_favorite_shortcut():
-    """Even a low-scored match featuring Tien clears the threshold."""
+def test_minor_favorite_match_is_not_pushable():
+    """A lightweight favorite match — small tournament, early round, low
+    ranks (e.g. Dimitrov R16 at Båstad) — no longer forces its way on. The
+    favorite bonus is not a blanket bypass."""
+    from string_theory.score import FAVORITE_PUSH_THRESHOLD
     m = make_match(
         tier="ATP250", round_short="R32", rank_a=21, rank_b=120,
         name_a="Learner Tien", name_b="Some Qualifier",
     )
     scored = score_match(m)
-    # tier 1 + round 1 + ranking 0 + favorite 2 + headliner 0 = 4 — below 7
-    assert scored.score < PUSH_THRESHOLD
-    # But favorite shortcut keeps it pushable
+    # tier 1 + round 1 + ranking 0 + favorite 2 + headliner 0 = 4 — under 6
+    assert scored.score < FAVORITE_PUSH_THRESHOLD
+    assert not is_pushable(scored)
+
+
+def test_meaningful_favorite_match_clears_lower_bar():
+    """A favorite in a more meaningful match clears the favorite bar (6.0)
+    even though it's under the general 7.0 threshold — favorites get a lower
+    bar, not no bar."""
+    from string_theory.score import FAVORITE_PUSH_THRESHOLD
+    m = make_match(
+        tier="ATP250", round_short="QF", rank_a=30, rank_b=45,
+        name_a="Grigor Dimitrov", name_b="Someone",
+    )
+    scored = score_match(m)
+    # tier 1 + round 3 (QF) + ranking 2 + favorite 2 = 8 -> clears both bars
+    assert scored.score >= FAVORITE_PUSH_THRESHOLD
     assert is_pushable(scored)
 
 

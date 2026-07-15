@@ -15,6 +15,12 @@ from .models import Match
 
 PUSH_THRESHOLD: float = 7.0
 
+# Favorites get a lower bar than the general threshold (not a blanket free
+# pass) — a favorite in a meaningful match still shows, but a minor one (a
+# low-ranked favorite in an ATP250 early round, e.g. Dimitrov R16 at Båstad,
+# score 5.0) no longer forces its way onto the calendar.
+FAVORITE_PUSH_THRESHOLD: float = 6.0
+
 TIER_WEIGHT = {
     "GS": 5.0,
     "M1000": 4.0,
@@ -129,9 +135,12 @@ def score_match(m: Match) -> Match:
     return replace(m, score=total, score_breakdown=breakdown)
 
 
-def is_pushable(m: Match, threshold: float = PUSH_THRESHOLD) -> bool:
-    """Push if the match features a named favorite OR clears the threshold.
-    Single global threshold — same bar for slams as for everything else."""
+def is_pushable(m: Match, threshold: float = PUSH_THRESHOLD,
+                favorite_threshold: float = FAVORITE_PUSH_THRESHOLD) -> bool:
+    """Push if the match clears its threshold. A favorite gets the lower
+    `favorite_threshold` (its +2 bonus plus a reduced bar) rather than a
+    blanket bypass, so an unimportant favorite match — small tournament,
+    early round, low-ranked — is dropped like any other lightweight match."""
     if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
-        return True
+        return m.score >= favorite_threshold
     return m.score >= threshold
