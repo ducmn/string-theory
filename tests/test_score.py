@@ -175,18 +175,31 @@ def test_minor_favorite_match_is_not_pushable():
 
 
 def test_meaningful_favorite_match_clears_lower_bar():
-    """A favorite in a more meaningful match clears the favorite bar (6.0)
-    even though it's under the general 7.0 threshold — favorites get a lower
-    bar, not no bar."""
+    """A favorite in a match under the general 7.0 threshold still clears the
+    lower favorite bar (6.0) — favorites get a lower bar, not no bar. Uses a
+    500-level event since 250s are excluded outright."""
     from string_theory.score import FAVORITE_PUSH_THRESHOLD
     m = make_match(
-        tier="ATP250", round_short="QF", rank_a=30, rank_b=45,
+        tier="ATP500", round_short="R32", rank_a=30, rank_b=200,
         name_a="Grigor Dimitrov", name_b="Someone",
     )
     scored = score_match(m)
-    # tier 1 + round 3 (QF) + ranking 2 + favorite 2 = 8 -> clears both bars
+    # tier 3 + round 1 (R32) + ranking 0 + favorite 2 = 6 -> clears fav bar, not 7
+    assert scored.score < PUSH_THRESHOLD
     assert scored.score >= FAVORITE_PUSH_THRESHOLD
     assert is_pushable(scored)
+
+
+def test_tour_250_excluded_even_at_final():
+    """No 250-level match lands on the calendar, even a final that otherwise
+    clears the threshold on round weight."""
+    m = make_match(
+        tier="ATP250", round_short="F", rank_a=16, rank_b=18,
+        name_a="A. Rublev", name_b="L. Darderi",
+    )
+    scored = score_match(m)
+    assert scored.score >= PUSH_THRESHOLD   # 1 + 5 + 2 = 8, would have cleared
+    assert not is_pushable(scored)          # but excluded by tier
 
 
 def test_default_threshold_is_seven():

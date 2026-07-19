@@ -21,6 +21,12 @@ PUSH_THRESHOLD: float = 7.0
 # score 5.0) no longer forces its way onto the calendar.
 FAVORITE_PUSH_THRESHOLD: float = 6.0
 
+# Tour-250 events are the lowest rung of the main tour; the user doesn't want
+# them at all, not even the final (a 250 SF/F otherwise scores 7–8 on round
+# weight alone). Excluded regardless of round or favorite. Bump the tier here
+# (e.g. drop "ATP500"/"WTA500" in too) to be stricter.
+EXCLUDED_TIERS = {"ATP250", "WTA250"}
+
 TIER_WEIGHT = {
     "GS": 5.0,
     "M1000": 4.0,
@@ -141,6 +147,8 @@ def is_pushable(m: Match, threshold: float = PUSH_THRESHOLD,
     `favorite_threshold` (its +2 bonus plus a reduced bar) rather than a
     blanket bypass, so an unimportant favorite match — small tournament,
     early round, low-ranked — is dropped like any other lightweight match."""
+    if m.tournament_tier in EXCLUDED_TIERS:
+        return False
     if (m.score_breakdown or {}).get("favorite", 0.0) > 0:
         return m.score >= favorite_threshold
     return m.score >= threshold
