@@ -21,6 +21,7 @@ change.
 """
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import time
@@ -168,14 +169,35 @@ def _strip_gender(name: str) -> str:
     return name
 
 
-def fetch_event_venue(sofa_id: int) -> str | None:
-    """Best-effort venue + country for a single event, e.g. "Centre Court,
-    United Kingdom" or "MetLife Stadium, USA".
+@functools.lru_cache(maxsize=256)
+def _region_for(lat: float, lon: float) -> str | None:
+    """Reverse-geocode coordinates to a state/province (e.g. "New Jersey",
+    "England") via BigDataCloud's free, keyless endpoint. Best-effort: any
+    failure returns None so the caller falls back to venue + country. Cached
+    so repeat venues in one run don't re-hit the API."""
+    url = (f"https://api.bigdatacloud.net/data/reverse-geocode-client"
+           f"?latitude={lat}&longitude={lon}&localityLanguage=en")
+    try:
+        r = curl_requests.get(url, headers={"User-Agent": "string-theory/1.0"}, timeout=10)
+        if r.status_code != 200:
+            return None
+        region = (r.json().get("principalSubdivision") or "").strip()
+        return region or None
+    except Exception as e:  # network/JSON — never fatal
+        log.warning("reverse-geocode failed for %s,%s: %s", lat, lon, e)
+        return None
 
-    Deliberately skips the city: Sofascore only carries the immediate city
-    (e.g. "East Rutherford" for MetLife Stadium), which is often an obscure
-    suburb rather than the recognisable metro, and there's no state/region
-    field to fall back on. Venue + country is the recognisable level.
+
+def fetch_event_venue(sofa_id: int) -> str | None:
+    """Best-effort venue + state/region + country for a single event, e.g.
+    "MetLife Stadium, New Jersey, USA" or "Centre Court, England, United
+    Kingdom".
+
+    Sofascore only carries the immediate city (e.g. "East Rutherford" for
+    MetLife Stadium) — often an obscure suburb — and no state/region field.
+    So we skip the city and reverse-geocode the venue coordinates to the
+    state/province, which is the recognisable level the user wants. Falls
+    back to venue + country if the coordinates or geocode are unavailable.
 
     Only the per-event detail endpoint carries `venue`; the scheduled-events
     list does not. Called just for the handful of finally-selected matches so
@@ -188,7 +210,13 @@ def fetch_event_venue(sofa_id: int) -> str | None:
     venue = ((data.get("event") or {}).get("venue")) or {}
     name = venue.get("name")
     country = ((venue.get("country") or (venue.get("city") or {}).get("country")) or {}).get("name")
-    return ", ".join(p for p in (name, country) if p) or None
+    coords = venue.get("venueCoordinates") or {}
+    lat, lon = coords.get("latitude"), coords.get("longitude")
+    region = _region_for(lat, lon) if lat is not None and lon is not None else None
+    # Drop a region that just repeats the country (e.g. small nations).
+    if region and country and region.lower() == country.lower():
+        region = None
+    return ", ".join(p for p in (name, region, country) if p) or None
 
 
 def _normalize_surface(s: str) -> str:
