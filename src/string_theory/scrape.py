@@ -169,9 +169,13 @@ def _strip_gender(name: str) -> str:
 
 
 def fetch_event_venue(sofa_id: int) -> str | None:
-    """Best-effort venue + city + country for a single event, e.g.
-    "Centre Court, London, United Kingdom" or "Hard Rock Stadium, Miami
-    Gardens, USA".
+    """Best-effort venue + country for a single event, e.g. "Centre Court,
+    United Kingdom" or "MetLife Stadium, USA".
+
+    Deliberately skips the city: Sofascore only carries the immediate city
+    (e.g. "East Rutherford" for MetLife Stadium), which is often an obscure
+    suburb rather than the recognisable metro, and there's no state/region
+    field to fall back on. Venue + country is the recognisable level.
 
     Only the per-event detail endpoint carries `venue`; the scheduled-events
     list does not. Called just for the handful of finally-selected matches so
@@ -183,9 +187,8 @@ def fetch_event_venue(sofa_id: int) -> str | None:
         return None
     venue = ((data.get("event") or {}).get("venue")) or {}
     name = venue.get("name")
-    city = (venue.get("city") or {}).get("name")
     country = ((venue.get("country") or (venue.get("city") or {}).get("country")) or {}).get("name")
-    return ", ".join(p for p in (name, city, country) if p) or None
+    return ", ".join(p for p in (name, country) if p) or None
 
 
 def _normalize_surface(s: str) -> str:
