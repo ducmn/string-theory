@@ -306,8 +306,15 @@ FOOTBALL_NATIONAL_TEAM_SLUGS = {
 }
 
 # National sides the user follows. A national-team match is only kept if one of
-# the two teams is in this set (matched on the Sofascore team name).
+# the two teams is in this set (matched on the Sofascore team name) — EXCEPT
+# for the rounds in FOOTBALL_NATION_EXEMPT_ROUNDS below.
 FOOTBALL_NATIONS = {"England", "France"}
+
+# Marquee rounds that are must-watch regardless of nation: the user wants the
+# World Cup / Euros / Copa final even when England and France aren't in it.
+# ("Final" is capitalised and is NOT a substring of "Semifinal"/"Quarterfinal",
+# so this matches the final only.)
+FOOTBALL_NATION_EXEMPT_ROUNDS = ("Final",)
 
 
 def _team_to_football_team(team: dict) -> Player:
@@ -356,8 +363,10 @@ def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
             if not any(r in round_name for r in FOOTBALL_ALLOWLIST[slug]):
                 continue
             # National-team comps (World Cup, Euros, Copa) are restricted to the
-            # nations the user follows; club comps pass through untouched.
-            if slug in FOOTBALL_NATIONAL_TEAM_SLUGS:
+            # nations the user follows; club comps pass through untouched. The
+            # final is exempt — it's must-watch whoever's in it.
+            if (slug in FOOTBALL_NATIONAL_TEAM_SLUGS
+                    and not any(r in round_name for r in FOOTBALL_NATION_EXEMPT_ROUNDS)):
                 names = {
                     (ev.get("homeTeam") or {}).get("name"),
                     (ev.get("awayTeam") or {}).get("name"),
