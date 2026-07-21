@@ -269,12 +269,23 @@ def _is_main_tour(event: dict) -> bool:
     return cat in {"atp", "wta"}
 
 
+# Tennis tournaments the user actually watches, by uniqueTournament.slug.
+# Everything else on tour is ignored outright — the user only follows
+# Wimbledon. Add slugs here (e.g. "us-open", "roland-garros") to widen.
+# Within an allowed tournament the normal score/threshold rules still apply,
+# so a dead-rubber R128 is still filtered out on merit.
+TENNIS_ALLOWLIST = {"wimbledon"}
+
+
 def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[Match]:
     out: list[Match] = []
     for ev in events:
         if not _is_singles(ev):
             continue
         if not _is_main_tour(ev):
+            continue
+        ut_slug = ((ev.get("tournament") or {}).get("uniqueTournament") or {}).get("slug") or ""
+        if ut_slug not in TENNIS_ALLOWLIST:
             continue
         # Include both upcoming AND in-progress matches: an ongoing match
         # should stay in the user's calendar (with end time covered by our
@@ -308,23 +319,18 @@ def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[M
 
 # Football competitions whose knockout matches should auto-land in the
 # calendar. Keys are uniqueTournament.slug from Sofa; values are round-name
-# substrings that qualify. League football (Premier League, La Liga, etc.)
-# is intentionally excluded — too many matches, too much noise.
+# substrings that qualify.
+#
+# The user only follows the World Cup, so that's all that's listed. The club
+# competitions and other internationals this used to cover — uefa-champions-
+# league, uefa-europa-league, uefa-europa-conference-league, european-
+# championship, copa-america, concacaf-champions-cup, fa-cup, copa-del-rey,
+# coppa-italia, dfb-pokal — can be re-added here as slug: [rounds] entries.
 FOOTBALL_ALLOWLIST: dict[str, list[str]] = {
-    "uefa-champions-league": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
-    "uefa-europa-league": ["Quarterfinal", "Semifinal", "Final"],
-    "uefa-europa-conference-league": ["Semifinal", "Final"],
     # Sofascore's slug for the FIFA World Cup is "world-championship"
     # (uniqueTournament id 16). Round names are plural ("Quarterfinals",
     # "Semifinals") — the substring match below handles that.
     "world-championship": ["Round of 16", "Quarterfinal", "Semifinal", "Final"],
-    "european-championship": ["Quarterfinal", "Semifinal", "Final"],
-    "copa-america": ["Quarterfinal", "Semifinal", "Final"],
-    "concacaf-champions-cup": ["Final"],
-    "fa-cup": ["Final"],
-    "copa-del-rey": ["Final"],
-    "coppa-italia": ["Final"],
-    "dfb-pokal": ["Final"],
 }
 
 # Competitions contested by national teams (as opposed to clubs). For these,
