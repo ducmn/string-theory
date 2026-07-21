@@ -34,6 +34,16 @@ from .models import Match, Player
 
 log = logging.getLogger(__name__)
 
+
+class SofascoreUnavailable(RuntimeError):
+    """Every Sofascore request in a fetch failed — an outage, not an empty
+    schedule.
+
+    Lets callers tell "the API is down, don't touch the calendar" apart from
+    "the API answered and nothing matched our filters". The latter is the
+    normal state most of the year now that scope is Wimbledon + World Cup,
+    and it must still allow stale events to be pruned."""
+
 DEFAULT_API = "https://api.sofascore.com/api/v1"
 IMPERSONATE = "chrome"
 HEADERS = {
@@ -142,16 +152,23 @@ def fetch_scheduled_events(date: str) -> list[dict]:
 
     Fetches each main-tour category (ATP, WTA) and concatenates. The old
     flat `/sport/tennis/scheduled-events/{date}` endpoint is dead (404).
+
+    Raises SofascoreUnavailable if EVERY category request failed, so the
+    caller can tell an outage from a genuinely empty schedule.
     """
     events: list[dict] = []
+    ok = 0
     for cid in TENNIS_CATEGORIES:
         try:
             events.extend(
                 _get_json_path(f"/category/{cid}/scheduled-events/{date}").get("events", [])
             )
+            ok += 1
         except RuntimeError as e:
             # A single failing category shouldn't sink the whole date.
             log.warning("category %s scheduled-events failed for %s: %s", cid, date, e)
+    if ok == 0:
+        raise SofascoreUnavailable(f"all tennis categories failed for {date}")
     return events
 
 
@@ -371,10 +388,14 @@ def _round_to_short_football(name: str) -> str:
 
 def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
     """Pull knockout-round football matches across the FOOTBALL_ALLOWLIST
-    competitions for the next `days_ahead` days."""
+    competitions for the next `days_ahead` days.
+
+    Raises SofascoreUnavailable if every category request failed — as opposed
+    to returning [] when the API answered but nothing is in scope."""
     today = datetime.now(timezone.utc).date()
     matches: list[Match] = []
     seen_ids: set[int] = set()
+    ok_calls = 0
     for d in range(days_ahead + 1):
         date_str = (today + timedelta(days=d)).isoformat()
         log.info("Fetching football events for %s", date_str)
@@ -384,6 +405,7 @@ def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
                 events.extend(
                     _get_json_path(f"/category/{cid}/scheduled-events/{date_str}").get("events", [])
                 )
+                ok_calls += 1
             except RuntimeError as e:
                 log.warning("football category %s failed for %s: %s", cid, date_str, e)
         for ev in events:
@@ -437,25 +459,44 @@ def fetch_upcoming_football_matches(days_ahead: int = 5) -> list[Match]:
                 player_a=_team_to_football_team(ev["homeTeam"]),
                 player_b=_team_to_football_team(ev["awayTeam"]),
             ))
+    if ok_calls == 0:
+        raise SofascoreUnavailable("all football category fetches failed")
     matches.sort(key=lambda m: m.start_utc)
     log.info("Loaded %d football matches", len(matches))
     return matches
 
 
 def fetch_upcoming_matches(days_ahead: int = 2) -> list[Match]:
-    """Pull main-tour singles matches scheduled within the next `days_ahead` days."""
-    rankings = fetch_rankings()
+    """Pull main-tour singles matches scheduled within the next `days_ahead` days.
+
+    Raises SofascoreUnavailable if nothing could be fetched at all (rankings
+    failed, or every date failed) — as opposed to returning [] when the API
+    answered fine but no match is in scope."""
+    try:
+        rankings = fetch_rankings()
+    except RuntimeError as e:
+        # Rankings drive the ranking/headliner scores; continuing without them
+        # would silently mis-score everything, so treat it as an outage.
+        raise SofascoreUnavailable(f"rankings fetch failed: {e}") from e
     today = datetime.now(timezone.utc).date()
     matches: list[Match] = []
     seen_ids: set[int] = set()
+    ok_dates = 0
     for d in range(days_ahead + 1):
         date_str = (today + timedelta(days=d)).isoformat()
         log.info("Fetching events for %s", date_str)
-        events = fetch_scheduled_events(date_str)
+        try:
+            events = fetch_scheduled_events(date_str)
+        except SofascoreUnavailable as e:
+            log.warning("tennis schedule unavailable for %s: %s", date_str, e)
+            continue
+        ok_dates += 1
         for m in normalize_events(events, rankings):
             if m.sofa_id in seen_ids:
                 continue
             seen_ids.add(m.sofa_id)
             matches.append(m)
+    if ok_dates == 0:
+        raise SofascoreUnavailable("no tennis date could be fetched")
     matches.sort(key=lambda m: m.start_utc)
     return matches

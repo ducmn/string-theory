@@ -3,6 +3,8 @@
 The user only watches Wimbledon (tennis) and the World Cup (football);
 everything else is filtered out before scoring even happens.
 """
+import pytest
+
 from string_theory.scrape import (
     FOOTBALL_ALLOWLIST,
     FOOTBALL_NATIONAL_TEAM_SLUGS,
@@ -62,3 +64,43 @@ def test_world_cup_knockout_rounds_qualify():
     rounds = FOOTBALL_ALLOWLIST["world-championship"]
     for r in ("Round of 16", "Quarterfinal", "Semifinal", "Final"):
         assert r in rounds
+
+
+# --- Outage vs. empty-but-healthy ---------------------------------------------
+
+def test_empty_but_healthy_source_does_not_raise(monkeypatch):
+    """The API answering with no in-scope matches is NOT an outage — it
+    returns [] so the caller still prunes stale events."""
+    from string_theory import scrape
+
+    monkeypatch.setattr(scrape, "fetch_rankings", lambda: {})
+    monkeypatch.setattr(scrape, "_get_json_path", lambda path, **kw: {"events": []})
+    assert scrape.fetch_upcoming_matches(days_ahead=0) == []
+    assert scrape.fetch_upcoming_football_matches(days_ahead=0) == []
+
+
+def test_total_failure_raises_sofascore_unavailable(monkeypatch):
+    """When every request fails it's an outage, signalled distinctly."""
+    from string_theory import scrape
+
+    def boom(path, **kw):
+        raise RuntimeError("HTTP 403")
+
+    monkeypatch.setattr(scrape, "fetch_rankings", lambda: {})
+    monkeypatch.setattr(scrape, "_get_json_path", boom)
+    with pytest.raises(scrape.SofascoreUnavailable):
+        scrape.fetch_upcoming_matches(days_ahead=0)
+    with pytest.raises(scrape.SofascoreUnavailable):
+        scrape.fetch_upcoming_football_matches(days_ahead=0)
+
+
+def test_rankings_failure_is_an_outage(monkeypatch):
+    """Losing rankings would silently mis-score everything, so it's an outage."""
+    from string_theory import scrape
+
+    def boom_rankings():
+        raise RuntimeError("HTTP 500")
+
+    monkeypatch.setattr(scrape, "fetch_rankings", boom_rankings)
+    with pytest.raises(scrape.SofascoreUnavailable):
+        scrape.fetch_upcoming_matches(days_ahead=0)

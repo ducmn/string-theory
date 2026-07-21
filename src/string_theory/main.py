@@ -39,6 +39,7 @@ from .conflicts import (
 from .models import Match
 from .score import is_pushable, score_match
 from .scrape import (
+    SofascoreUnavailable,
     fetch_event_venue,
     fetch_upcoming_football_matches,
     fetch_upcoming_matches,
@@ -94,8 +95,22 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s  %(levelname)-7s  %(name)s  %(message)s",
     )
 
-    tennis = fetch_upcoming_matches(days_ahead=args.days_ahead)
-    football = fetch_upcoming_football_matches(days_ahead=args.days_ahead)
+    # Track whether Sofascore actually answered. An empty result is the NORMAL
+    # state now that scope is Wimbledon + World Cup, so "no matches" must not
+    # be mistaken for an outage — otherwise stale events could never be pruned.
+    source_ok = False
+    try:
+        tennis = fetch_upcoming_matches(days_ahead=args.days_ahead)
+        source_ok = True
+    except SofascoreUnavailable as e:
+        log.warning("tennis source unavailable: %s", e)
+        tennis = []
+    try:
+        football = fetch_upcoming_football_matches(days_ahead=args.days_ahead)
+        source_ok = True
+    except SofascoreUnavailable as e:
+        log.warning("football source unavailable: %s", e)
+        football = []
     raw = tennis + football
     log.info("Fetched %d candidate matches (%d tennis + %d football)",
              len(raw), len(tennis), len(football))
@@ -157,12 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     deduped = [_with_court(m) for m in deduped]
     log.info("Final events after cut/split: %d", len(deduped))
 
-    # Safety: only skip prune when Sofa itself returned nothing (likely
-    # outage) — NOT when our filters legitimately dropped everything. If
-    # raw had matches but they all got filtered out, the user wants the
-    # previously-pushed events that no longer qualify to be deleted too.
-    if not raw and not args.no_prune:
-        log.info("Sofa returned no candidates — skipping calendar update entirely (no prune).")
+    # Safety: only skip the calendar update when Sofascore was unreachable.
+    # An empty selection with a HEALTHY source is normal (Wimbledon and the
+    # World Cup are on for a few weeks a year) and must still prune, so that
+    # events which no longer qualify get deleted.
+    if not source_ok:
+        log.warning("Sofascore unreachable — skipping calendar update entirely (no prune).")
         return 0
 
     counters = upsert_matches(deduped, calendar_id=calendar_id, dry_run=args.dry_run, service=service)
