@@ -35,21 +35,33 @@ def _tennis_event(slug: str, sofa_id: int = 1) -> dict:
     }
 
 
-def test_only_wimbledon_survives_normalisation():
-    """A Wimbledon match is kept; other slams and tour events are dropped."""
+def test_empty_allowlist_admits_whole_tour():
+    """With an empty TENNIS_ALLOWLIST, every ATP/WTA tournament flows through
+    normalisation (scoring/threshold filter later, not here)."""
     events = [
         _tennis_event("wimbledon", 1),
         _tennis_event("us-open", 2),
         _tennis_event("roland-garros", 3),
         _tennis_event("australian-open", 4),
-        _tennis_event("bastad", 5),
     ]
     kept = normalize_events(events, rankings={})
+    assert {m.tournament_slug for m in kept} == {
+        "wimbledon", "us-open", "roland-garros", "australian-open"
+    }
+
+
+def test_tennis_allowlist_when_set_narrows(monkeypatch):
+    """A non-empty allowlist restricts to the listed tournaments."""
+    from string_theory import scrape
+    monkeypatch.setattr(scrape, "TENNIS_ALLOWLIST", {"wimbledon"})
+    kept = scrape.normalize_events(
+        [_tennis_event("wimbledon", 1), _tennis_event("us-open", 2)], rankings={}
+    )
     assert [m.tournament_slug for m in kept] == ["wimbledon"]
 
 
-def test_tennis_allowlist_is_wimbledon_only():
-    assert TENNIS_ALLOWLIST == {"wimbledon"}
+def test_tennis_tour_is_on_by_default():
+    assert TENNIS_ALLOWLIST == set()
 
 
 def test_football_allowlist_is_world_cup_only():

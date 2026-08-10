@@ -103,7 +103,7 @@ def test_grand_slam_final_top_players_scores_high():
     assert scored.score == 17.0
     assert scored.score_breakdown == {
         "tier": 5.0, "round": 5.0, "ranking": 5.0, "favorite": 0.0, "headliner": 2.0,
-        "total": 17.0,
+        "priority": 0.0, "total": 17.0,
     }
 
 
@@ -271,3 +271,42 @@ def test_non_gs_at_score_8_is_pushable_again():
     # headliner 2 (Auger top-5) = 7.0 — just clears threshold of 7
     assert scored.score == 7.0
     assert is_pushable(scored)
+
+
+# --- Sinner priority ----------------------------------------------------------
+
+def test_sinner_gets_priority_bonus_on_top_of_favorite():
+    """A Sinner match scores higher than the same match with a plain favorite,
+    via the extra priority bonus."""
+    from string_theory.score import priority_bonus
+    assert priority_bonus("Jannik Sinner", "Random") == 3.0
+    assert priority_bonus("Random", "Grigor Dimitrov") == 0.0  # favorite, not priority
+    sinner = score_match(make_match(
+        tier="M1000", round_short="R32", rank_a=1, rank_b=80,
+        name_a="Jannik Sinner", name_b="Q. Ualifier",
+    ))
+    other_fav = score_match(make_match(
+        tier="M1000", round_short="R32", rank_a=40, rank_b=80,
+        name_a="Grigor Dimitrov", name_b="Q. Ualifier",
+    ))
+    assert sinner.score_breakdown["priority"] == 3.0
+    assert sinner.score > other_fav.score
+
+
+def test_sinner_wins_overlap_clash_over_other_favorite():
+    """When a Sinner match overlaps another favorite's higher-scored match,
+    Sinner is the one kept (both use make_match's fixed same start_utc, so
+    they overlap)."""
+    from string_theory.conflicts import pick_non_overlapping
+    sinner = score_match(make_match(
+        tier="ATP500", round_short="R32", rank_a=1, rank_b=90,
+        name_a="Jannik Sinner", name_b="A. Nobody",
+    ))
+    # A higher-scored favorite match (GS final) that would otherwise win.
+    dimitrov = score_match(make_match(
+        tier="GS", round_short="F", rank_a=5, rank_b=6,
+        name_a="Grigor Dimitrov", name_b="C. Alcaraz",
+    ))
+    assert dimitrov.score > sinner.score          # Sinner scores lower...
+    kept = pick_non_overlapping([dimitrov, sinner])
+    assert [m.player_a.full_name for m in kept] == ["Jannik Sinner"]  # ...but wins

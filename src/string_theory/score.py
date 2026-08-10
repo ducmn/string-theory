@@ -60,6 +60,13 @@ FAVORITES = {
     "Arthur Fery",
 }
 
+# Top-priority players. A match featuring one of these outranks every other
+# match in an overlap clash (see pick_non_overlapping) and gets an extra
+# scoring nudge on top of the favorite bonus. These must also be in FAVORITES.
+PRIORITY_FAVORITES = {
+    "Jannik Sinner",
+}
+
 # National football teams the user follows. A match featuring one of these
 # always survives dedup (see pick_non_overlapping) — matched against
 # Player.full_name, which for football holds the team name.
@@ -87,6 +94,12 @@ def ranking_score(rank_a: Optional[int], rank_b: Optional[int]) -> float:
 
 def favorite_bonus(name_a: str, name_b: str) -> float:
     return 2.0 if (name_a in FAVORITES or name_b in FAVORITES) else 0.0
+
+
+def priority_bonus(name_a: str, name_b: str) -> float:
+    """Extra weight for a top-priority player (e.g. Sinner) on top of the
+    favorite bonus, so their matches outscore other favorites."""
+    return 3.0 if (name_a in PRIORITY_FAVORITES or name_b in PRIORITY_FAVORITES) else 0.0
 
 
 def headliner_bonus(rank_a: Optional[int], rank_b: Optional[int]) -> float:
@@ -129,13 +142,15 @@ def score_match(m: Match) -> Match:
     rank = ranking_score(m.player_a.ranking, m.player_b.ranking)
     fav = favorite_bonus(m.player_a.full_name, m.player_b.full_name)
     headliner = headliner_bonus(m.player_a.ranking, m.player_b.ranking)
-    total = tier + rnd + rank + fav + headliner
+    priority = priority_bonus(m.player_a.full_name, m.player_b.full_name)
+    total = tier + rnd + rank + fav + headliner + priority
     breakdown = {
         "tier": tier,
         "round": rnd,
         "ranking": rank,
         "favorite": fav,
         "headliner": headliner,
+        "priority": priority,
         "total": total,
     }
     return replace(m, score=total, score_breakdown=breakdown)

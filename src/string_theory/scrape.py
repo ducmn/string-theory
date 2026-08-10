@@ -286,12 +286,11 @@ def _is_main_tour(event: dict) -> bool:
     return cat in {"atp", "wta"}
 
 
-# Tennis tournaments the user actually watches, by uniqueTournament.slug.
-# Everything else on tour is ignored outright — the user only follows
-# Wimbledon. Add slugs here (e.g. "us-open", "roland-garros") to widen.
-# Within an allowed tournament the normal score/threshold rules still apply,
-# so a dead-rubber R128 is still filtered out on merit.
-TENNIS_ALLOWLIST = {"wimbledon"}
+# Tennis tournaments the user watches, by uniqueTournament.slug. An EMPTY set
+# means "the whole tour" — every ATP/WTA singles event flows through, subject
+# to the normal score/threshold rules (and EXCLUDED_TIERS). Put slugs here
+# (e.g. {"wimbledon"}) to narrow back down to specific tournaments.
+TENNIS_ALLOWLIST: set[str] = set()
 
 
 def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[Match]:
@@ -302,7 +301,7 @@ def normalize_events(events: Iterable[dict], rankings: dict[int, int]) -> list[M
         if not _is_main_tour(ev):
             continue
         ut_slug = ((ev.get("tournament") or {}).get("uniqueTournament") or {}).get("slug") or ""
-        if ut_slug not in TENNIS_ALLOWLIST:
+        if TENNIS_ALLOWLIST and ut_slug not in TENNIS_ALLOWLIST:
             continue
         # Include both upcoming AND in-progress matches: an ongoing match
         # should stay in the user's calendar (with end time covered by our

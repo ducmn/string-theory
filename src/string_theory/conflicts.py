@@ -76,12 +76,15 @@ def pick_non_overlapping(matches: Iterable[Match]) -> list[Match]:
     want a higher-scored Auger-Aliassime to evict a Tien match.
     """
     def sort_key(m: Match) -> tuple:
+        prio = (m.score_breakdown or {}).get("priority", 0.0) > 0
         fav_present = (m.score_breakdown or {}).get("favorite", 0.0) > 0
-        # Priority: favorites first, then tennis over football (the user
-        # prefers tennis when the two clash, even though football scores
-        # higher), then by score, then earliest start.
+        # Priority: a top-priority player (e.g. Sinner) wins any clash first,
+        # then favorites, then tennis over football (the user prefers tennis
+        # when the two clash, even though football scores higher), then by
+        # score, then earliest start.
         is_football = m.tour == "football"
-        return (0 if fav_present else 1, 1 if is_football else 0, -m.score, m.start_utc)
+        return (0 if prio else 1, 0 if fav_present else 1,
+                1 if is_football else 0, -m.score, m.start_utc)
 
     by_score = sorted(matches, key=sort_key)
     kept: list[Match] = []
