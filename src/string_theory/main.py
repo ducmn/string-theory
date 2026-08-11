@@ -37,6 +37,7 @@ from .conflicts import (
     stack_sequential_matches,
 )
 from .models import Match
+from .broadcaster import uk_broadcaster_for_match
 from .score import is_pushable, score_match
 from .scrape import (
     SofascoreUnavailable,
@@ -50,6 +51,20 @@ log = logging.getLogger("string_theory")
 LONDON = ZoneInfo("Europe/London")
 WATCH_WINDOW_START = dtime(7, 0)    # inclusive, London local
 WATCH_WINDOW_END = dtime(23, 0)     # exclusive — a match starting past 11pm is too late
+
+# "BBC only" model: only surface matches shown free-to-air on the BBC (BBC
+# iPlayer). In practice that's Wimbledon and the World Cup / Euros — the events
+# the user can actually watch without a paid subscription. Everything on
+# NowTV/Sky, TNT Sports, Premier Sports, etc. is dropped. Set False to include
+# every broadcaster again.
+BBC_ONLY = True
+
+
+def is_on_bbc(m: Match) -> bool:
+    """True if the match's UK broadcaster is (or includes) the BBC. Split
+    free-to-air tournaments read as "BBC iPlayer / ITVX"; an ITV-only fixture
+    override reads as "ITVX" and is excluded."""
+    return "bbc" in uk_broadcaster_for_match(m).lower()
 
 
 def is_in_watch_window(m: Match) -> bool:
@@ -73,6 +88,11 @@ def select_matches(matches: Iterable[Match]) -> list[Match]:
         if not is_pushable(scored):
             continue
         if not is_in_watch_window(scored):
+            continue
+        if BBC_ONLY and not is_on_bbc(scored):
+            log.info("skip (not on BBC — %s): %s vs %s",
+                     uk_broadcaster_for_match(scored),
+                     scored.player_a.short_name, scored.player_b.short_name)
             continue
         out.append(scored)
     out.sort(key=lambda x: x.start_utc)

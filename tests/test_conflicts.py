@@ -363,12 +363,15 @@ def test_busy_filter_drops_when_free_segment_too_short():
     assert out == []
 
 
-def test_office_hours_matches_allowed_when_free():
+def test_office_hours_matches_allowed_when_free(monkeypatch):
     """Office-hours matches are no longer blanket-blocked — a Tue daytime match
-    with no work-calendar clash is kept; conflicts are handled per-meeting."""
+    with no work-calendar clash is kept; conflicts are handled per-meeting.
+    (BBC_ONLY is off here so the generic 'rome' fixture isn't broadcaster-filtered.)"""
     from zoneinfo import ZoneInfo
+    from string_theory import main
     from string_theory.main import select_matches
 
+    monkeypatch.setattr(main, "BBC_ONLY", False)
     LONDON = ZoneInfo("Europe/London")
     # Tue May 12 2026, 10:00 BST — an office-hours slot, but no busy check here.
     tue_start = datetime(2026, 5, 12, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
