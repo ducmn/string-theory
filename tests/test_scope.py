@@ -118,14 +118,14 @@ def test_rankings_failure_is_an_outage(monkeypatch):
         scrape.fetch_upcoming_matches(days_ahead=0)
 
 
-# --- BBC-only model -----------------------------------------------------------
+# --- Broadcaster allowlist (BBC / ITV / TNT) ----------------------------------
 
-def test_bbc_only_keeps_wimbledon_drops_paid_tennis(monkeypatch):
-    """With BBC_ONLY on, a Wimbledon match is kept but a NowTV/TNT one is not."""
+def test_broadcaster_allowlist_keeps_free_to_air_and_tnt_drops_nowtv(monkeypatch):
+    """BBC/ITV/TNT tournaments are kept; a NowTV (Sky) one is dropped."""
     from string_theory import main
     from string_theory.score import score_match
 
-    monkeypatch.setattr(main, "BBC_ONLY", True)
+    monkeypatch.setattr(main, "ALLOWED_BROADCASTERS", {"BBC", "ITV", "TNT"})
 
     from datetime import datetime, timezone
     in_window = int(datetime(2026, 6, 10, 13, 0, tzinfo=timezone.utc).timestamp())  # 14:00 BST
@@ -137,8 +137,19 @@ def test_bbc_only_keeps_wimbledon_drops_paid_tennis(monkeypatch):
         return score_match(normalize_events([ev], rankings={})[0])
 
     wimbledon = _m("wimbledon")            # BBC iPlayer
+    roland_garros = _m("roland-garros")    # TNT Sports on HBO Max
     us_open = _m("us-open")                # NowTV
-    assert main.is_on_bbc(wimbledon) is True
-    assert main.is_on_bbc(us_open) is False
-    kept = main.select_matches([wimbledon, us_open])
-    assert [x.tournament_slug for x in kept] == ["wimbledon"]
+    assert main.is_watchable(wimbledon) is True
+    assert main.is_watchable(roland_garros) is True    # TNT
+    assert main.is_watchable(us_open) is False         # NowTV
+    kept = main.select_matches([wimbledon, roland_garros, us_open])
+    assert {x.tournament_slug for x in kept} == {"wimbledon", "roland-garros"}
+
+
+def test_empty_broadcaster_allowlist_disables_filter(monkeypatch):
+    from string_theory import main
+    from string_theory.score import score_match
+    monkeypatch.setattr(main, "ALLOWED_BROADCASTERS", set())
+    ev = _tennis_event("us-open")
+    ev["tournament"]["uniqueTournament"]["slug"] = "us-open"
+    assert main.is_watchable(score_match(normalize_events([ev], rankings={})[0])) is True

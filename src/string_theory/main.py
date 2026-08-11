@@ -52,19 +52,20 @@ LONDON = ZoneInfo("Europe/London")
 WATCH_WINDOW_START = dtime(7, 0)    # inclusive, London local
 WATCH_WINDOW_END = dtime(23, 0)     # exclusive — a match starting past 11pm is too late
 
-# "BBC only" model: only surface matches shown free-to-air on the BBC (BBC
-# iPlayer). In practice that's Wimbledon and the World Cup / Euros — the events
-# the user can actually watch without a paid subscription. Everything on
-# NowTV/Sky, TNT Sports, Premier Sports, etc. is dropped. Set False to include
-# every broadcaster again.
-BBC_ONLY = True
+# Only surface matches on a broadcaster the user can actually watch. Entries
+# are matched as case-insensitive substrings against
+# broadcaster.uk_broadcaster_for_match, so "TNT" catches "TNT Sports on HBO
+# Max" / "TNT Sports / Amazon Prime" and "ITV" catches "ITVX". Everything else
+# (NowTV/Sky, Premier Sports, …) is dropped. An EMPTY set disables the filter.
+ALLOWED_BROADCASTERS = {"BBC", "ITV", "TNT"}
 
 
-def is_on_bbc(m: Match) -> bool:
-    """True if the match's UK broadcaster is (or includes) the BBC. Split
-    free-to-air tournaments read as "BBC iPlayer / ITVX"; an ITV-only fixture
-    override reads as "ITVX" and is excluded."""
-    return "bbc" in uk_broadcaster_for_match(m).lower()
+def is_watchable(m: Match) -> bool:
+    """True if the match's UK broadcaster is one in ALLOWED_BROADCASTERS."""
+    if not ALLOWED_BROADCASTERS:
+        return True
+    bc = uk_broadcaster_for_match(m).lower()
+    return any(a.lower() in bc for a in ALLOWED_BROADCASTERS)
 
 
 def is_in_watch_window(m: Match) -> bool:
@@ -89,8 +90,8 @@ def select_matches(matches: Iterable[Match]) -> list[Match]:
             continue
         if not is_in_watch_window(scored):
             continue
-        if BBC_ONLY and not is_on_bbc(scored):
-            log.info("skip (not on BBC — %s): %s vs %s",
+        if not is_watchable(scored):
+            log.info("skip (broadcaster %s not in allowlist): %s vs %s",
                      uk_broadcaster_for_match(scored),
                      scored.player_a.short_name, scored.player_b.short_name)
             continue
